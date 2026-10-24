@@ -45,6 +45,8 @@ final class HomeMode {
      * refuses Free My TV mode while Original and the watchdog still run.
      */
     static final boolean AMAZON = "Amazon".equalsIgnoreCase(Build.MANUFACTURER) || "Amazon".equalsIgnoreCase(Build.BRAND);
+    /** Philips (TP Vision/TPV, MediaTek m7332, Android 11): fusion.android.tv.demo receives the remote's Input key. */
+    static final boolean PHILIPS = "Philips".equalsIgnoreCase(Build.BRAND) || "TPV".equalsIgnoreCase(Build.MANUFACTURER);
 
     /** Classic Android TV's home screen; its recommendations service crashes on the screensaver while it's off (#11). */
     static final String TV_LAUNCHER = "com.google.android.tvlauncher";
@@ -91,6 +93,9 @@ final class HomeMode {
         // KTC (NextStar; MediaTek)
         "tv.anoki.acr.controller",                                                    // Anoki ACR: watches what's on screen
         "com.mediatek.tv.retaildemo", "com.electronic.manual",                        // store demo, manual
+        // Philips (TP Vision/TPV; MediaTek m7332, Android 11)
+        "org.droidtv.nettv.market", "org.droidtv.nettvregistration",                  // NetTV app gallery, registration
+        "org.droidtv.android.fitness",                                                // Philips Fitness promo app
         // HY300 projectors (Amlogic txhd2, Android 13): JmLauncher opens it from the Home button (JM_HOME); off only
         // once JM_HOME is ours
         HTC_HOME,                                                                     // the stock home (and an ad SDK)
@@ -120,6 +125,10 @@ final class HomeMode {
         "org.droidtv.gel", "org.droidtv.eum", "com.mediatek.tv.service", "com.mediatek.tvinput", "com.mediatek.network",
         "com.mediatek.wwtv.tvcenter", "com.mediatek.wwtv.setupwizard", "com.mediatek.tv.factory",
         "mediatek.factorymenu.ui", "com.tpv.xmic.ots.cms.client",
+        // Philips (TPV, 55PUG7406, Android 11): TPV settings and input layer, terms of use, loggers next to the inputs,
+        // MediaTek webview
+        "com.android.tv.settings.tpv", "android.autoinstalls.config.tpv.device", "com.android.tv.tou",
+        "org.droidtv.candeebug", "org.droidtv.tv.frameworklogger", "com.mediatek.wwtv.webview",
         // Multilaser (Expressluck / CVTE): remote pairing and keys, live TV, media player, factory menus
         "com.express.bt.autopair", "com.mediatek.autopair", "com.mediatek.hotkey.dispatcher",
         "com.mediatek.android.tv.globalkeyoverlay", "com.cltv.fast", "com.mediatek.wwtv.mediaplayer",
@@ -185,6 +194,7 @@ final class HomeMode {
     /** Checked before every disable: never the protected list, Amazon's packages, Android's own pieces or a factory menu. */
     private static boolean mayTurnOff(String pkg) {
         return !PROTECTED.contains(pkg) && !pkg.startsWith("com.amazon.")
+                && !(PHILIPS && "fusion.android.tv.demo".equals(pkg))
                 && !CORE.matcher(pkg).matches() && !FACTORY.matcher(pkg).matches();
     }
 
