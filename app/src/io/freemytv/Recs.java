@@ -705,6 +705,17 @@ final class Recs {
         }
     }
 
+    /** A TMDB call with the configured key (Trending uses it too). */
+    JSONObject tmdb(String path) throws IOException, org.json.JSONException {
+        return get(path);
+    }
+
+    /** The installed app that streams a TMDB provider, as {key, package}, or null (Trending). */
+    String[] streamingApp(String providerName, int providerId) {
+        String[] s = service(providerName, providerId);
+        return s != null && installed(s[2]) ? new String[] {s[1], s[2]} : null;
+    }
+
     private String readKey() {
         String key = Config.TMDB_KEY.trim();
         return key.isEmpty() ? null : key;

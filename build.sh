@@ -42,6 +42,7 @@ ASSIST=false; [ "$(prop disable_assistant false)" = "true" ] && ASSIST=true
 CRYPTO=false; [ "$(prop show_crypto true)" = "true" ] && CRYPTO=true
 ANIMATION=false; [ "$(prop hide_animation false)" = "true" ] && ANIMATION=true
 BING=false; [ "$(prop bing_wallpaper false)" = "true" ] && BING=true
+HOME_PICKS=true; [ "$(prop home_picks true)" = "false" ] && HOME_PICKS=false
 
 rm -rf out && mkdir -p out/gen/io/freemytv out/classes
 cat > out/gen/io/freemytv/Config.java <<EOF
@@ -67,6 +68,8 @@ final class Config {
     static final String NEWS_FEED = "$(prop news_feed '')";
     static final String STATE = "$(prop state '')";
     static final boolean BING_WALLPAPER = $BING;
+    static final String EXCHANGE_RATES = "$(prop exchange_rates '')";
+    static final boolean HOME_PICKS = $HOME_PICKS;
 }
 EOF
 

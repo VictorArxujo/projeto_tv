@@ -88,8 +88,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private static final long TOAST_MS = 6000, FADE_MS = 800;
     /** Blur radii of the shadow and shadowDeep paints (Shadows needs them to draw the same blur on older TVs). */
     private static final float SHADOW_BLUR = 26, DEEP_BLUR = 30;
-    private static final int SKY = 0, HERO = 1, STATUS = 2, PLATTER = 3, TILES = 4, DRAWER = 5, SHEET = 6, TOAST = 7;
-    private static final int Z_STATUS = 0, Z_HERO = 1, Z_SHELF = 2, Z_DRAWER = 3, Z_MUSIC = 6;
+    private static final int SKY = 0, HERO = 1, STATUS = 2, PLATTER = 3, TILES = 4, DRAWER = 5, SHEET = 6, TOAST = 7, DASH = 8;
+    private static final int Z_STATUS = 0, Z_HERO = 1, Z_SHELF = 2, Z_DRAWER = 3, Z_MUSIC = 6, Z_DASH = 7;
     private static final ExecutorService LOADER = Executors.newSingleThreadExecutor();
     // Light design (the L_ constants): title, tab bar, three recommendation cards and the shelf.
     // The tab bar is a 68 px capsule; the cards sit on the 5-column grid (the wide one spans 3).
@@ -124,7 +124,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         @Override public void hold(int id) { a11yHold(); }
     });
     private final RectF a11yRect = new RectF();
-    private final Layer sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, toastLayer;
+    private final Layer sky, heroLayer, status, platter, tiles, drawerLayer, dashLayer, sheetLayer, toastLayer;
     private int zone = Z_SHELF;
 
     // Night look (like Apple's "Automatic" appearance): darker from sunset to sunrise, with a 2 s transition.
@@ -313,7 +313,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             // The layer may be shifted (bottom drawer): the glass reads the background from where it really is. The
             // drawer and the top buttons are always drawn as if resting in place (they are only visible there and are
             // not redrawn while they move).
-            scene.setOffset(0, kind == DRAWER || kind == STATUS ? 0 : getTranslationY());
+            scene.setOffset(0, kind == DRAWER || kind == STATUS || kind == DASH ? 0 : getTranslationY());
             shadows.dither = dark() > 0.5f;
             switch (kind) {
                 case SKY: drawSky(c); break;
@@ -323,6 +323,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 case TILES: drawTiles(c); break;
                 case DRAWER: drawDrawer(c); break;
                 case SHEET: drawSheet(c); break;
+                case DASH: drawDash(c); break;
                 default: drawToast(c); break;
             }
             scene.setOffset(0, 0);
@@ -352,7 +353,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             if (!running) return;
             wake();
             data.refreshIfStale();
-            recs.refreshIfStale();
+            if (picksOn()) recs.refreshIfStale();
+            trendingSource.refreshIfStale();
             music.retry();   // the listener may come back a moment after an update
             checkNotices();
             updatePalette();
@@ -381,19 +383,21 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         platter = new Layer(a, PLATTER);
         tiles = new Layer(a, TILES);
         drawerLayer = new Layer(a, DRAWER);
+        dashLayer = new Layer(a, DASH);
         sheetLayer = new Layer(a, SHEET);
         toastLayer = new Layer(a, TOAST);
         // Hardware layers on the GPU: only the one that changed is redrawn; moving, fading and scaling stay cheap.
         // Not on Android 8 to 11: on older GPUs (a Mi Box 3's Mali-450) redrawing and compositing a big layer on every
         // frame cost more than drawing straight to the screen (measured: focus on the picks 33 → 12 ms a frame, the
         // drawer 19 → 17 ms).
-        for (View v : new View[] {heroLayer, status, platter, tiles, drawerLayer, sheetLayer}) v.setLayerType(Ui.LEGACY ? LAYER_TYPE_NONE : LAYER_TYPE_HARDWARE, null);
-        for (View v : new View[] {sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, toastLayer}) {
+        for (View v : new View[] {heroLayer, status, platter, tiles, drawerLayer, dashLayer, sheetLayer}) v.setLayerType(Ui.LEGACY ? LAYER_TYPE_NONE : LAYER_TYPE_HARDWARE, null);
+        for (View v : new View[] {sky, heroLayer, status, platter, tiles, drawerLayer, dashLayer, sheetLayer, toastLayer}) {
             v.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);   // TalkBack reads the items (Spoken)
             addView(v);
         }
         setContentDescription("Free My TV");
         drawerLayer.setVisibility(INVISIBLE);
+        dashLayer.setVisibility(INVISIBLE);
         for (int i = 0; i < topFocus.length; i++) {
             topFocus[i] = new Spring(0.26f, 0.85f, 0);
             topRects[i] = new RectF();
@@ -430,8 +434,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         data.addListener(this);
         recs.addListener(this);
         music.start();
+        trendingSource.setListener(this::onTrending);
+        trendingSource.refreshIfStale();
         data.refreshIfStale();
-        recs.refreshIfStale();
+        if (picksOn()) recs.refreshIfStale();
         Photos.importInbox(getContext(), ownReady);   // photos a computer just sent
         if (tvInputs != null) tvInputs.registerCallback(inputCallback, handler);
         handler.postDelayed(tick, 15_000);
@@ -482,9 +488,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (animated) {
             sheet.target = 0;
             drawer.target = 0;
+            dash.target = 0;
         } else {
             sheet.snap(0);
             drawer.snap(0);
+            dash.snap(0);
         }
         if (pickIndex != 0 && !picks.isEmpty()) {
             pickIndex = 0;
@@ -528,7 +536,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         updatePalette();
         checkNight(true);
         layoutStatus();
-        heroDirty = statusDirty = drawerDirty = true;
+        heroDirty = statusDirty = drawerDirty = dashDirty = true;
         platter.invalidate();
     }
 
@@ -554,6 +562,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         measure(platter, width, Math.round(320 * kk));
         measure(tiles, width, Math.round(270 * kk));
         measure(drawerLayer, width, Math.round(600 * kk));
+        measure(dashLayer, width, height);
         measure(sheetLayer, width, height);
         measure(toastLayer, Math.round(1000 * kk), Math.round(220 * kk));
         setMeasuredDimension(width, height);
@@ -572,6 +581,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         place(platter, 0, Math.round(750 * kk));
         place(tiles, 0, Math.round(790 * kk));
         place(drawerLayer, 0, Math.round(470 * kk));
+        dashLayer.layout(0, 0, width, height);
         sheetLayer.layout(0, 0, width, height);
         sheetLayer.setPivotX(width / 2f);
         sheetLayer.setPivotY(height / 2f);
@@ -704,7 +714,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         heroMoving |= topMoving | cardsMoving;
         boolean drawerItemsMoving = step(drawerFocus, dt);
         boolean gridMoving = step(gridFocus, dt) | scroll.step(dt);
-        boolean drawerMoving = drawer.step(dt);
+        boolean drawerMoving = drawer.step(dt) | dash.step(dt);
+        boolean dashItemsMoving = step(dashFocus, dt);
         boolean sheetMoving = sheet.step(dt);
         boolean toastFading = tickToast(up);
         boolean heroFading = tickHeroFade(up);
@@ -720,6 +731,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (statusMoving || statusDirty || bgFading) status.invalidate();
         if (heroMoving || heroDirty || heroFading) heroLayer.invalidate();
         if (drawerItemsMoving || drawerDirty || bgFading) drawerLayer.invalidate();
+        if (dashItemsMoving || dashDirty || bgFading) dashLayer.invalidate();
+        dashDirty = false;
         if (gridMoving || gridDirty) sheetLayer.invalidate();
         if (drawerMoving || bgFading) sky.invalidate();
         if (bgFading || (drawerWasMoving && !drawerMoving)) platter.invalidate();
@@ -762,14 +775,18 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void updateMotion() {
         float d = drawer.value, dc = Ui.clamp(d), s = Ui.clamp(sheet.value);
         float home = 1 - s, top = home * (1 - smoothstep(0, 0.32f, dc));
-        float shift = SHIFT * k;
-        float lift = -d * shift;
+        float shift = SHIFT * k, floor = dash.value * h;   // the second floor pushes everything up by a screen
+        float lift = -d * shift - floor;
         show(heroLayer, top, lift);
         show(status, top, lift);
         show(platter, home, lift);
         show(tiles, home, lift);
         float da = home * smoothstep(0.1f, 0.6f, dc);
-        drawerLayer.setTranslationY((1 - d) * shift);
+        drawerLayer.setTranslationY((1 - d) * shift - floor);
+        float dv = home * Ui.clamp(dash.value * 2);
+        dashLayer.setTranslationY((1 - dash.value) * h);
+        dashLayer.setAlpha(dv);
+        dashLayer.setVisibility(dv > 0.002f ? VISIBLE : INVISIBLE);
         drawerLayer.setAlpha(da);
         drawerLayer.setVisibility(da > 0.002f ? VISIBLE : INVISIBLE);
         sheetLayer.setVisibility(s > 0.001f || sheetOpen ? VISIBLE : INVISIBLE);
@@ -1578,6 +1595,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void closeDrawer() {
         drawerOpen = false;
         drawer.target = 0;
+        dash.target = 0;
         zone = Z_SHELF;
         for (Spring f : drawerFocus) f.snap(0);   // the drawer goes away: its focus doesn't need to animate
         if (!shelf.isEmpty() && drawerIndex < drawerRects.length) shelfIndex = nearest(tileRects, drawerRects[drawerIndex].centerX());
@@ -2041,6 +2059,251 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         return s.toString();
     }
 
+    // MARK: - The drawer's second floor (↓ again from the drawer): Trending, exchange rates and today's TV time
+
+    private final Spring dash = new Spring(0.38f, 0.9f, 0);
+    private final Spring[] dashFocus = new Spring[Trending.MAX];
+    private final RectF[] posterRects = new RectF[Trending.MAX];
+    private final RectF fxCard = new RectF(), usageCard = new RectF();
+    private final Trending trendingSource = Trending.get(getContext());
+    private List<Trending.Item> trending = new ArrayList<>();
+    private BitmapShader[] posterShaders = new BitmapShader[0];
+    private String[] dashTitles = new String[0], dashApps = new String[0];
+    private List<Usage.App> usage = new ArrayList<>();
+    private String[] usageLabels = new String[0], usageTimes = new String[0];
+    private String usageTotal = "";
+    private final String[] fxNames = new String[HomeData.FX.length], fxPrices = new String[HomeData.FX.length],
+            fxChanges = new String[HomeData.FX.length];
+    private long fxMadeAt = -1;
+    private int dashGeneration = -1;
+    private boolean dashDirty;
+    private int dashIndex;
+    private Paint dashTitle, posterTitle, posterApp, usageBig;
+    private final Snapshot fxSnapshot = new Snapshot(), usageSnapshot = new Snapshot();
+    private static final float POSTER_W = 194, POSTER_H = 291, POSTER_TOP = 150, POSTER_GAP = 28;
+    private static final float DASH_CARDS_TOP = 590, DASH_CARDS_H = 420;
+
+    {
+        for (int i = 0; i < Trending.MAX; i++) {
+            dashFocus[i] = new Spring(0.32f, 0.78f, 0);
+            posterRects[i] = new RectF();
+        }
+        float scale = getResources().getDisplayMetrics().widthPixels / 1920f;
+        trendingSource.setPosterSize(Math.round(POSTER_W * scale), Math.round(POSTER_H * scale));
+    }
+
+    private void openDash() {
+        dash.target = 1;
+        zone = Z_DASH;
+        dashIndex = Math.min(dashIndex, Math.max(0, trending.size() - 1));
+        trendingSource.refreshIfStale();
+        Context app = getContext().getApplicationContext();
+        LOADER.execute(() -> {
+            List<Usage.App> today = Usage.today(app);
+            handler.post(() -> {
+                usage = today;
+                makeUsageText();
+                dashDirty = true;
+                wake();
+            });
+        });
+        dashDirty = true;
+    }
+
+    private void closeDash() {
+        dash.target = 0;
+        zone = Z_DRAWER;
+    }
+
+    private void onTrending() {
+        List<Trending.Item> list = trendingSource.items();
+        trending = list;
+        BitmapShader[] shaders = new BitmapShader[list.size()];
+        for (int i = 0; i < shaders.length; i++) {
+            Bitmap b = list.get(i).poster;
+            if (b != null) shaders[i] = new BitmapShader(b, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+        }
+        posterShaders = shaders;
+        dashGeneration = -1;
+        dashIndex = Math.min(dashIndex, Math.max(0, list.size() - 1));
+        dashDirty = true;
+        wake();
+    }
+
+    /** The streaming service's name for a Trending item ("Netflix"), "" when no installed app streams it. */
+    private static String serviceOf(Trending.Item t) {
+        if (t.app == null) return "";
+        Recs.Pick p = new Recs.Pick();
+        p.app = t.app;
+        String name = Recs.serviceName(p);
+        return name == null ? "" : name;
+    }
+
+    /** The text the second floor draws, fitted once per change (never while drawing a frame). */
+    private void makeDashText() {
+        if (dashTitle == null) {
+            dashTitle = Ui.text(Ui.semibold, 34 * k, L_INK);
+            posterTitle = Ui.text(Ui.medium, 23 * k, L_INK);
+            posterApp = Ui.text(Ui.medium, 20 * k, L_DIM);
+            usageBig = Ui.numbers(Ui.light, 64 * k, L_INK);
+        }
+        if (dashGeneration != Ui.generation || dashTitles.length != trending.size()) {
+            dashGeneration = Ui.generation;
+            String[] t = new String[trending.size()], a = new String[trending.size()];
+            for (int i = 0; i < t.length; i++) {
+                t[i] = fit(trending.get(i).title, posterTitle, POSTER_W * k);
+                a[i] = fit(serviceOf(trending.get(i)), posterApp, POSTER_W * k);
+            }
+            dashTitles = t;
+            dashApps = a;
+            fxMadeAt = -1;
+            makeUsageText();
+        }
+        if (fxMadeAt != data.fxAt) {
+            fxMadeAt = data.fxAt;
+            for (int i = 0; i < HomeData.FX.length; i++) {
+                String code = HomeData.FX[i];
+                fxNames[i] = code.equals("USD") ? Ui.tr("US Dollar") : code.equals("EUR") ? Ui.tr("Euro")
+                        : code.equals("GBP") ? Ui.tr("British Pound") : code;
+                fxPrices[i] = HomeData.brl(data.fxRate[i]);
+                fxChanges[i] = HomeData.change(data.fxChange[i]);
+            }
+        }
+    }
+
+    private void makeUsageText() {
+        if (dashTitle == null) return;
+        int n = Math.min(4, usage.size());
+        String[] labels = new String[n], times = new String[n];
+        long total = 0;
+        for (Usage.App a : usage) total += a.ms;
+        for (int i = 0; i < n; i++) {
+            labels[i] = fit(usage.get(i).label, cardText, 300 * k);
+            times[i] = SleepTimer.duration((int) Math.max(1, (usage.get(i).ms + 30_000) / 60_000));
+        }
+        usageLabels = labels;
+        usageTimes = times;
+        usageTotal = total == 0 ? "" : SleepTimer.duration((int) Math.max(1, (total + 30_000) / 60_000));
+    }
+
+    private void drawDash(Canvas c) {
+        makeDashText();
+        dashTitle.setColor(drawerInk(1));
+        posterTitle.setColor(drawerInk(0.95f));
+        posterApp.setColor(tone(L_DIM, 0xADFFFFFF));
+        usageBig.setColor(drawerInk(1));
+        cardTitle.setColor(tone(L_DIM, 0xB3FFFFFF));
+        cardText.setColor(drawerInk(0.95f));
+        cardDim.setColor(tone(L_DIM, 0xADFFFFFF));
+        cardDimRight.setColor(tone(L_FAINT, 0x99FFFFFF));
+        pricePaint.setColor(drawerInk(0.95f));
+        float left = MARGIN * k, right = CONTENT_R * k;
+        c.drawText(Ui.tr("Trending"), left, 112 * k, dashTitle);
+        if (trending.isEmpty()) {
+            c.drawText(Recs.hasKey(getContext()) ? "…" : Ui.tr("Add a TMDB key to see what's trending."), left,
+                    (POSTER_TOP + POSTER_H / 2) * k, cardDim);
+        }
+        int top = -1;
+        for (int i = 0; i < trending.size(); i++) {
+            float x = left + i * (POSTER_W + POSTER_GAP) * k;
+            posterRects[i].set(x, POSTER_TOP * k, x + POSTER_W * k, (POSTER_TOP + POSTER_H) * k);
+            if (dashFocus[i].value > 0.02f && (top < 0 || dashFocus[i].value > dashFocus[top].value)) top = i;
+        }
+        for (int i = 0; i < trending.size(); i++) if (i != top) drawPoster(c, i);
+        if (top >= 0) drawPoster(c, top);
+        float cardsTop = DASH_CARDS_TOP * k, half = (right - left - 32 * k) / 2;
+        fxCard.set(left, cardsTop, left + half, cardsTop + DASH_CARDS_H * k);
+        usageCard.set(right - half, cardsTop, right, cardsTop + DASH_CARDS_H * k);
+        snap(fxCard);
+        snap(usageCard);
+        String key = drawerCardsKey() + "|" + data.fxAt + "|" + usageTotal + "|" + usageLabels.length;
+        if (HomeData.FX.length > 0) {
+            drawerCard(c, fxCard);
+            if (Ui.LEGACY) fxSnapshot.draw(c, fxCard, key, cc -> drawRates(cc, fxCard));
+            else drawRates(c, fxCard);
+        }
+        drawerCard(c, usageCard);
+        if (Ui.LEGACY) usageSnapshot.draw(c, usageCard, key, cc -> drawUsage(cc, usageCard));
+        else drawUsage(c, usageCard);
+    }
+
+    /** A poster: rounded, growing a little when focused (the tvOS focus), its title and service under it. */
+    private void drawPoster(Canvas c, int i) {
+        Trending.Item t = trending.get(i);
+        RectF r = posterRects[i];
+        float f = Ui.clamp(dashFocus[i].value), s = 1 + 0.08f * f;
+        cell.set(r.centerX() - r.width() * s / 2, r.centerY() - r.height() * s / 2,
+                r.centerX() + r.width() * s / 2, r.centerY() + r.height() * s / 2);
+        tmp.set(cell);
+        tmp.offset(0, (8 + 12 * f) * k);
+        shadow.setColor(Ui.alpha(0xFF000000, tone(0.16f, 0.35f) + 0.2f * f));
+        shadows.draw(c, tmp, 18 * k, SHADOW_BLUR * k, shadow);
+        if (t.poster != null && i < posterShaders.length && posterShaders[i] != null) {
+            roundImage(c, t.poster, posterShaders[i], cell, 18 * k * s);
+        } else {
+            fill.setShader(null);
+            fill.setColor(tone(0x1A000000, 0x26FFFFFF));
+            c.drawRoundRect(cell, 18 * k, 18 * k, fill);
+        }
+        if (f > 0.01f) {
+            rim.setShader(null);
+            rim.setColor(Ui.alpha(0xFFFFFFFF, 0.6f * f));
+            c.drawRoundRect(cell, 18 * k * s, 18 * k * s, rim);
+        }
+        if (i < dashTitles.length) {
+            c.drawText(dashTitles[i], r.left, cell.bottom + 34 * k, posterTitle);
+            c.drawText(dashApps[i], r.left, cell.bottom + 62 * k, posterApp);
+        }
+    }
+
+    /** Exchange rates in the configured currency, with today's change (green/red, like the quotes card). */
+    private void drawRates(Canvas c, RectF r) {
+        float x = r.left + 34 * k, right = r.right - 34 * k;
+        c.drawText(Ui.tr("Exchange rates"), x, r.top + 54 * k, cardTitle);
+        String stale = HomeData.staleness(data.fxAt, 15 * 60_000L);
+        if (!stale.isEmpty()) c.drawText(stale, right, r.top + 54 * k, cardDimRight);
+        float cap = Ui.cap(cardText);
+        for (int i = 0; i < HomeData.FX.length && i < 5; i++) {
+            float base = r.top + (130 + 64 * i) * k, mid = base - cap / 2;
+            c.drawText(fxNames[i] == null ? HomeData.FX[i] : fxNames[i], x, base, cardText);
+            if (fxPrices[i] != null) c.drawText(fxPrices[i], right - 128 * k, base, pricePaint);
+            double change = data.fxChange[i];
+            if (Double.isNaN(change) || fxChanges[i] == null) continue;
+            int color = change >= 0 ? tone(0xFF248A3D, UP_COLOR) : tone(0xFFD70015, DOWN_COLOR);
+            tmp.set(right - 108 * k, mid - 17 * k, right, mid + 17 * k);
+            fill.setShader(null);
+            fill.setColor(Ui.alpha(color, 0.2f));
+            c.drawRoundRect(tmp, 17 * k, 17 * k, fill);
+            changePaint.setColor(color);
+            c.drawText(fxChanges[i], tmp.centerX(), mid + Ui.halfCap(changePaint), changePaint);
+        }
+    }
+
+    /** Today's TV time: the total, big, then the four apps used longest, each with a bar against the first. */
+    private void drawUsage(Canvas c, RectF r) {
+        float x = r.left + 34 * k, right = r.right - 34 * k;
+        c.drawText(Ui.tr("TV time today"), x, r.top + 54 * k, cardTitle);
+        if (usageTotal.isEmpty()) {
+            c.drawText(Ui.tr("No apps used yet today."), x, r.top + 130 * k, cardDim);
+            return;
+        }
+        c.drawText(usageTotal, x - 4 * k, r.top + 136 * k, usageBig);
+        long most = usage.isEmpty() ? 1 : Math.max(1, usage.get(0).ms);
+        float barLeft = x + 320 * k, barRight = right - 150 * k;
+        for (int i = 0; i < usageLabels.length && i < usage.size(); i++) {
+            float base = r.top + (206 + 54 * i) * k, mid = base - Ui.cap(cardText) / 2;
+            c.drawText(usageLabels[i], x, base, cardText);
+            tmp.set(barLeft, mid - 5 * k, barRight, mid + 5 * k);
+            fill.setShader(null);
+            fill.setColor(tone(0x14000000, 0x1FFFFFFF));
+            c.drawRoundRect(tmp, 5 * k, 5 * k, fill);
+            tmp.right = barLeft + (barRight - barLeft) * Math.min(1f, usage.get(i).ms / (float) most);
+            fill.setColor(tone(0xFF0066CC, 0xFF64D2FF));
+            c.drawRoundRect(tmp, 5 * k, 5 * k, fill);
+            c.drawText(usageTimes[i], right, base, cardDimRight);
+        }
+    }
+
     // MARK: - Focus
 
     /** Sets the springs' targets from the current focus (snap: no animation). */
@@ -2050,6 +2313,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         boolean tilesChanged = aim(tileFocus, !sheetOpen && zone == Z_SHELF ? shelfIndex : -1, snap);
         boolean statusChanged = aim(statusFocus, !sheetOpen && zone == Z_STATUS ? statusIndex : -1, snap);
         boolean drawerChanged = aim(drawerFocus, !sheetOpen && zone == Z_DRAWER ? drawerIndex : -1, snap);
+        dashDirty |= snap | aim(dashFocus, !sheetOpen && zone == Z_DASH ? dashIndex : -1, snap);
         boolean heroChanged = heroFocus.target != (!sheetOpen && zone == Z_HERO ? 1 : 0);
         heroFocus.target = !sheetOpen && zone == Z_HERO ? 1 : 0;
         if (snap) heroFocus.snap(heroFocus.target);
@@ -2666,7 +2930,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void back() {
         if (sheetOpen) {
             closeSheet();
-        } else if (zone == Z_DRAWER || zone == WIDGETS) {
+        } else if (zone == Z_DRAWER || zone == WIDGETS || zone == Z_DASH) {
             closeDrawer();
             retarget(false);
         } else if (zone != Z_SHELF) {
@@ -2733,6 +2997,17 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     return;
                 }
                 break;
+            case Z_DASH: {
+                int n = trending.size();
+                if (dy < 0) {
+                    closeDash();
+                } else if (dx != 0 && n > 0 && dashIndex + dx >= 0 && dashIndex + dx < n) {
+                    dashIndex += dx;
+                } else {
+                    return;
+                }
+                break;
+            }
             case WIDGETS: {
                 List<Integer> on = widgets();
                 int at = on.indexOf(widgetIndex);
@@ -2757,7 +3032,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     zone = WIDGETS;
                     widgetIndex = widgets().get(0);
                 } else {
-                    return;
+                    openDash();
                 }
                 break;
         }
@@ -2810,6 +3085,17 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (!sheetOpen && zone == Z_MUSIC) {
             click.open();
             music.command(musicIndex);
+            return;
+        }
+        if (!sheetOpen && zone == Z_DASH) {
+            if (dashIndex >= trending.size()) return;
+            Trending.Item t = trending.get(dashIndex);
+            RectF pr = posterRects[dashIndex];
+            click.open();
+            if (t.pkg == null || !HomeApps.open(activity, HomeApps.app(t.pkg, t.title), this, Math.round(pr.left),
+                    Math.round(pr.top), Math.round(pr.width()), Math.round(pr.height()))) {
+                showToast(Ui.trf("Couldn't open {app}.", "app", t.title));
+            }
             return;
         }
         if (sheetOpen && sheetKind != PAGE_APPS) {
@@ -3130,6 +3416,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         for (int i = 0; i < 3 + lightButtons.size(); i++) out.add(a11yId(Z_TOP, i));
         if (musicOn()) for (int i = 0; i < 3; i++) out.add(a11yId(Z_MUSIC, i));
+        if (dash.target > 0) for (int i = 0; i < trending.size(); i++) out.add(a11yId(Z_DASH, i));
         for (int i = 0; i < Math.min(3, cards.size()); i++) out.add(a11yId(Z_CARDS, i));
         for (int i = shelfFirst; i < Math.min(shelf.size(), shelfFirst + shelfVisible); i++) out.add(a11yId(Z_SHELF, i));
         for (int i = 0; i < drawerItems.size(); i++) out.add(a11yId(Z_DRAWER, i));
@@ -3149,6 +3436,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 if (i >= 3) return label(lightButtons, i - 3);
                 return Ui.trf("{name}, tab {i} of {n}", "name", tabs()[i], "i", i + 1, "n", 3);
             case Z_CARDS: return i < cards.size() ? pickText(cards.get(i)) : "";
+            case Z_DASH:
+                if (i >= trending.size()) return "";
+                return trending.get(i).title + (dashApps[i].isEmpty() ? "" : ", " + dashApps[i]);
             case Z_MUSIC:
                 if (i == 0) return Ui.tr("Previous track");
                 if (i == 2) return Ui.tr("Next track");
@@ -3199,6 +3489,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 a11yRect.set(topRects[i]);
                 dy = (i < 3 ? heroLayer : status).getTranslationY();
                 break;
+            case Z_DASH:
+                if (i >= trending.size() || dash.target <= 0) return false;
+                a11yRect.set(posterRects[i]);
+                dy = 0;
+                break;
             case Z_MUSIC:
                 if (i >= 3 || !musicOn()) return false;
                 a11yRect.set(musicRects[i]);
@@ -3242,6 +3537,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         switch (zone) {
             case Z_TOP: return a11yId(Z_TOP, topIndex);
             case Z_MUSIC: return a11yId(Z_MUSIC, musicIndex);
+            case Z_DASH: return trending.isEmpty() ? -1 : a11yId(Z_DASH, dashIndex);
             case Z_CARDS: return cardIndex < cards.size() ? a11yId(Z_CARDS, cardIndex) : -1;
             case Z_SHELF: return shelf.isEmpty() ? -1 : a11yId(Z_SHELF, shelfIndex);
             case Z_DRAWER: return drawerItems.isEmpty() ? -1 : a11yId(Z_DRAWER, drawerIndex);
@@ -3309,6 +3605,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 if (i >= 3 || !musicOn()) return;
                 if (drawerOpen) closeDrawer();
                 musicIndex = i;
+                break;
+            case Z_DASH:
+                if (i >= trending.size()) return;
+                if (!drawerOpen) openDrawer();
+                openDash();
+                dashIndex = i;
                 break;
             case Z_SHELF:
                 if (i >= shelf.size()) return;
@@ -3418,7 +3720,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 retarget(false);
             }
         }
-        for (Recs.Pick p : recs.wanted()) recs.backdrop(p);   // all three tabs preloaded: switching tabs is instant
+        // All three tabs preloaded: switching tabs is instant (only when the picks are on the home screen).
+        if (picksOn()) for (Recs.Pick p : recs.wanted()) recs.backdrop(p);
         // Picks bring their own background; without them (no TMDB key), your photo if there is one.
         boolean own = !picksOn() && Photos.on(getContext());
         // Without picks or photos: Bing's photo of the day (bing_wallpaper), or the gradient.
@@ -3533,8 +3836,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         lTab.setColor(dim);
     }
 
+    /** The picks on the home screen: a TMDB key, unless home_picks=false keeps the clock (the key then fills Trending). */
     private boolean picksOn() {
-        return Recs.hasKey(getContext());
+        return Recs.hasKey(getContext()) && Config.HOME_PICKS;
     }
 
     private void drawClock(Canvas c) {

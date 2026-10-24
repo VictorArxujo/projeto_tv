@@ -254,12 +254,14 @@ final class HomeMode {
      * boot check and an update turn it back on.
      */
     static void ensureRemoteService(Context c, long delayMs) {
-        // Also the now-playing listener, which Android may take back too (it needs no maker's keys).
-        if (RemoteKeys.supported() || !NowPlaying.allowed(c)) ModeJob.schedule(c, ModeJob.REMOTE, null, delayMs);
+        // Also the now-playing listener and the usage access, which Android may take back too (no maker's keys needed).
+        if (RemoteKeys.supported() || !NowPlaying.allowed(c) || !Usage.allowed(c)) {
+            ModeJob.schedule(c, ModeJob.REMOTE, null, delayMs);
+        }
     }
 
     static void ensureRemoteServiceNow(Context app) {
-        boolean keys = RemoteKeys.supported(), music = !NowPlaying.allowed(app);
+        boolean keys = RemoteKeys.supported(), music = !NowPlaying.allowed(app) || !Usage.allowed(app);
         if ((!keys && !music) || !FREE.equals(state(app).optString("mode"))) return;
         try (Adb adb = Adb.connect(app, 10_000, null)) {
             if (keys) remoteService(app, adb, true);
@@ -269,11 +271,16 @@ final class HomeMode {
         }
     }
 
-    /** Allows our notification listener (NowPlaying: what's playing on the home screen), or takes it back. */
+    /**
+     * Allows our notification listener (NowPlaying: what's playing on the home screen) and the usage access (Usage:
+     * today's TV time in the drawer), or takes both back.
+     */
     private static void nowPlaying(Context c, Adb adb, boolean on) throws IOException {
         String me = NowPlaying.component(c).flattenToString();
         String out = adb.shell("cmd notification " + (on ? "allow_listener " : "disallow_listener ") + me).trim();
         AppLog.w("now playing listener " + (on ? "on" : "off") + (out.isEmpty() ? "" : ": " + out));
+        out = adb.shell("appops set " + PKG + " GET_USAGE_STATS " + (on ? "allow" : "default")).trim();
+        AppLog.w("usage access " + (on ? "on" : "off") + (out.isEmpty() ? "" : ": " + out));
     }
 
     private static final String REMOTE_SERVICE = PKG + "/" + PKG + ".RemoteKeyService";

@@ -40,6 +40,7 @@ final class HomeData {
     static final String[] COINS = {"BTC", "ETH", "SOL", "USDT"};
     static final String[] COIN_NAMES = {"Bitcoin", "Ethereum", "Solana", "Dollar"};
     private static final String CURRENCY = Config.CURRENCY.trim().toUpperCase(Locale.ROOT);
+    private static final String CURRENCY_CODE = CURRENCY;
     /** Binance has no pairs in some currencies (INR...) and then refuses the whole request: prices go in dollars instead. */
     private static volatile boolean inDollars;
 
@@ -65,6 +66,18 @@ final class HomeData {
     private static final String STATE = Config.STATE.trim().toLowerCase(Locale.ROOT);
     private static final TimeZone BRASILIA = TimeZone.getTimeZone("America/Sao_Paulo");
     private static final int MAX_HEADLINES = 12;
+    /** Exchange rates against the configured currency (AwesomeAPI, no key; every 15 min): exchange_rates=USD,EUR,GBP. */
+    static final String[] FX = fxCodes();
+    private static final long FX_EVERY = 15 * 60_000L;
+
+    private static String[] fxCodes() {
+        List<String> out = new ArrayList<>();
+        for (String code : Config.EXCHANGE_RATES.split(",")) {
+            String c = code.trim().toUpperCase(Locale.ROOT);
+            if (c.matches("[A-Z]{3}") && !c.equals(CURRENCY_CODE) && !out.contains(c)) out.add(c);
+        }
+        return out.toArray(new String[0]);
+    }
     interface Listener { void onData(); }
 
     static boolean newsOn() {
@@ -164,6 +177,9 @@ final class HomeData {
     volatile long pricesAt, weatherAt;
     volatile Weather weather = new Weather();
     volatile String[] headlines = new String[0];
+    /** FX's rates (in the configured currency) and their change today (%), NaN until fetched. */
+    final double[] fxRate = new double[FX.length], fxChange = new double[FX.length];
+    volatile long fxAt;
     /** Each headline's subtitle ("" when the feed has none), in the same order. */
     volatile String[] summaries = new String[0];
     volatile long newsAt, electionAt;
@@ -178,7 +194,8 @@ final class HomeData {
     private final List<Listener> listeners = new ArrayList<>();
     private volatile boolean fetchingPrices, fetchingWeather;
     private volatile long pricesFailedAt, weatherFailedAt;
-    private volatile boolean fetchingNews, fetchingElection;
+    private volatile boolean fetchingNews, fetchingElection, fetchingFx;
+    private volatile long fxFailedAt;
     private volatile long newsFailedAt, electionFailedAt;
     /** The city of the forecast in memory: another process (ScreensaverAlone) can see the city change under it. */
     private volatile String weatherFor = "";
@@ -198,6 +215,15 @@ final class HomeData {
                 weather = parseWeather(w);
                 weatherAt = cache.getLong("weatherAt", 0);
                 weatherFor = weatherPlace();
+            }
+        } catch (Exception ignored) {}
+        java.util.Arrays.fill(fxRate, Double.NaN);
+        java.util.Arrays.fill(fxChange, Double.NaN);
+        try {
+            String f = cache.getString("fx", null);
+            if (FX.length > 0 && f != null) {
+                parseFx(f);
+                fxAt = cache.getLong("fxAt", 0);
             }
         } catch (Exception ignored) {}
         try {
@@ -289,6 +315,25 @@ final class HomeData {
                 }
             });
         }
+        if (FX.length > 0 && !fetchingFx && (now - fxAt > FX_EVERY || now < fxAt) && !failedRecently(fxFailedAt, now)) {
+            fetchingFx = true;
+            io.execute(() -> {
+                try {
+                    StringBuilder pairs = new StringBuilder();
+                    for (String code : FX) pairs.append(pairs.length() == 0 ? "" : ",").append(code).append('-').append(CURRENCY);
+                    String body = get("https://economia.awesomeapi.com.br/json/last/" + pairs);
+                    parseFx(body);
+                    fxAt = System.currentTimeMillis();
+                    cache.edit().putString("fx", body).putLong("fxAt", fxAt).apply();
+                    notifyListeners();
+                } catch (Exception e) {
+                    fxFailedAt = System.currentTimeMillis();
+                    AppLog.w("exchange rates: " + e.getMessage());
+                } finally {
+                    fetchingFx = false;
+                }
+            });
+        }
         if (electionsOn() && !fetchingElection && (now - electionAt > ELECTION_EVERY || now < electionAt)
                 && !failedRecently(electionFailedAt, now)) {
             fetchingElection = true;
@@ -306,6 +351,17 @@ final class HomeData {
                     fetchingElection = false;
                 }
             });
+        }
+    }
+
+    /** AwesomeAPI: {"USDBRL": {"bid": "4.96", "pctChange": "-1.72"}, ...}. */
+    private void parseFx(String body) throws Exception {
+        JSONObject o = new JSONObject(body);
+        for (int i = 0; i < FX.length; i++) {
+            JSONObject r = o.optJSONObject(FX[i] + CURRENCY);
+            if (r == null) continue;
+            fxRate[i] = Double.parseDouble(r.optString("bid", "NaN"));
+            fxChange[i] = Double.parseDouble(r.optString("pctChange", "NaN"));
         }
     }
 
