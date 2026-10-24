@@ -13,6 +13,7 @@ import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
@@ -439,6 +440,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         handler.removeCallbacks(featureNext);
         handler.postDelayed(featureNext, FEATURE_MS);
         trendingSource.setListener(this::onTrending);
+        // A new home screen (the activity made again) takes the list there is now: no new list may come for hours.
+        if (trendingSource.items() != trending) onTrending();
         trendingSource.refreshIfStale();
         data.refreshIfStale();
         if (picksOn()) recs.refreshIfStale();
@@ -471,6 +474,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         data.removeListener(this);
         recs.removeListener(this);
         music.stop();
+        perf.stop();
         handler.removeCallbacks(progressTick);
         handler.removeCallbacks(featureNext);
         if (tvInputs != null) tvInputs.unregisterCallback(inputCallback);
@@ -486,6 +490,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     void reset(boolean animated) {
         wake();
         cancelReorder(!animated);
+        perf.stop();
         zone = Z_SHELF;
         shelfIndex = 0;
         sheetOpen = false;
@@ -1600,6 +1605,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     private void openDrawer() {
         if (drawerItems.isEmpty()) return;
+        perf.start();   // the chart has some history by the time the second floor shows
         drawerOpen = true;
         drawer.target = 1;
         zone = Z_DRAWER;
@@ -1612,6 +1618,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         drawerOpen = false;
         drawer.target = 0;
         dash.target = 0;
+        perf.stop();
         zone = Z_SHELF;
         for (Spring f : drawerFocus) f.snap(0);   // the drawer goes away: its focus doesn't need to animate
         if (!shelf.isEmpty() && drawerIndex < drawerRects.length) shelfIndex = nearest(tileRects, drawerRects[drawerIndex].centerX());
@@ -2346,7 +2353,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         long total = 0;
         for (Usage.App a : usage) total += a.ms;
         for (int i = 0; i < n; i++) {
-            labels[i] = fit(usage.get(i).label, cardText, 300 * k);
+            labels[i] = fit(usage.get(i).label, cardText, 180 * k);
             times[i] = SleepTimer.duration((int) Math.max(1, (usage.get(i).ms + 30_000) / 60_000));
         }
         usageLabels = labels;
@@ -2379,11 +2386,16 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         for (int i = 0; i < trending.size(); i++) if (i != top) drawPoster(c, i);
         if (top >= 0) drawPoster(c, top);
-        float cardsTop = DASH_CARDS_TOP * k, half = (right - left - 32 * k) / 2;
-        fxCard.set(left, cardsTop, left + half, cardsTop + DASH_CARDS_H * k);
-        usageCard.set(right - half, cardsTop, right, cardsTop + DASH_CARDS_H * k);
+        // Three cards: exchange rates, today's TV time, the TV's performance (a card that is off gives its room).
+        boolean fx = HomeData.FX.length > 0;
+        float cardsTop = DASH_CARDS_TOP * k, gap = 32 * k, third = (right - left - (fx ? 2 : 1) * gap) / (fx ? 3 : 2);
+        fxCard.set(left, cardsTop, left + third, cardsTop + DASH_CARDS_H * k);
+        float uLeft = fx ? fxCard.right + gap : left;
+        usageCard.set(uLeft, cardsTop, uLeft + third, cardsTop + DASH_CARDS_H * k);
+        perfCard.set(usageCard.right + gap, cardsTop, right, cardsTop + DASH_CARDS_H * k);
         snap(fxCard);
         snap(usageCard);
+        snap(perfCard);
         String key = drawerCardsKey() + "|" + data.fxAt + "|" + usageTotal + "|" + usageLabels.length;
         if (HomeData.FX.length > 0) {
             drawerCard(c, fxCard);
@@ -2393,6 +2405,94 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         drawerCard(c, usageCard);
         if (Ui.LEGACY) usageSnapshot.draw(c, usageCard, key, cc -> drawUsage(cc, usageCard));
         else drawUsage(c, usageCard);
+        drawerCard(c, perfCard);
+        if (Ui.LEGACY) perfSnapshot.draw(c, perfCard, drawerCardsKey() + "|" + perfStamp, cc -> drawPerf(cc, perfCard));
+        else drawPerf(c, perfCard);
+    }
+
+    // The TV's performance: CPU and memory over the last two minutes (Perf), a line chart each, the latest at the right.
+    private final Perf perf = new Perf(getContext(), this::onPerf);
+    private final RectF perfCard = new RectF();
+    private final Snapshot perfSnapshot = new Snapshot();
+    private final Path chartLine = new Path(), chartFill = new Path();
+    private final Paint chartStroke = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private int perfStamp;
+    private String cpuText = "…", ramText = "…";
+
+    {
+        chartStroke.setStyle(Paint.Style.STROKE);
+        chartStroke.setStrokeJoin(Paint.Join.ROUND);
+        chartStroke.setStrokeCap(Paint.Cap.ROUND);
+    }
+
+    private void onPerf() {
+        perfStamp++;
+        float c = perf.count > 0 ? perf.cpu[perf.count - 1] : Float.NaN;
+        float r = perf.count > 0 ? perf.ram[perf.count - 1] : Float.NaN;
+        cpuText = !Float.isNaN(c) ? Math.round(c) + "%" : perf.cpuKnown || perf.count < 3 ? "…" : Ui.tr("Unavailable");
+        ramText = Float.isNaN(r) ? "…" : String.format(Ui.locale(), "%d%%  ·  %.1f / %.1f GB", Math.round(r),
+                perf.usedMem / 1e9, perf.totalMem / 1e9);
+        if (dash.target > 0) {
+            dashDirty = true;
+            wake();
+        }
+    }
+
+    private void drawPerf(Canvas c, RectF r) {
+        float x = r.left + 34 * k, right = r.right - 34 * k;
+        c.drawText(Ui.tr("TV performance"), x, r.top + 54 * k, cardTitle);
+        drawMetric(c, "CPU", cpuText, perf.cpu, x, right, r.top + 112 * k, r.top + 128 * k, r.top + 222 * k,
+                tone(0xFF0066CC, 0xFF64D2FF));
+        drawMetric(c, Ui.tr("Memory"), ramText, perf.ram, x, right, r.top + 274 * k, r.top + 290 * k, r.top + 384 * k,
+                tone(0xFF248A3D, 0xFF30D158));
+    }
+
+    /** A label and its value on one line, then the line chart (0 to 100%) under it, gaps where a sample is unknown. */
+    private void drawMetric(Canvas c, String label, String value, float[] samples, float left, float right, float base,
+                            float top, float bottom, int color) {
+        c.drawText(label, left, base, cardText);
+        c.drawText(value, right, base, pricePaint);
+        fill.setShader(null);
+        fill.setColor(tone(0x14000000, 0x1FFFFFFF));
+        c.drawRect(left, bottom - 1 * k, right, bottom, fill);
+        int n = perf.count;
+        if (n < 2) return;
+        float step = (right - left) / (Perf.SAMPLES - 1), h = bottom - top;
+        chartLine.reset();
+        chartFill.reset();
+        boolean open = false;
+        float firstX = 0, lastX = 0;
+        for (int i = 0; i < n; i++) {
+            float v = samples[i];
+            float px = left + (Perf.SAMPLES - n + i) * step;
+            if (Float.isNaN(v)) {
+                open = false;
+                continue;
+            }
+            float py = bottom - h * Math.max(0, Math.min(100, v)) / 100f;
+            if (!open) {
+                chartLine.moveTo(px, py);
+                if (chartFill.isEmpty()) {
+                    chartFill.moveTo(px, bottom);
+                    firstX = px;
+                }
+                chartFill.lineTo(px, py);
+                open = true;
+            } else {
+                chartLine.lineTo(px, py);
+                chartFill.lineTo(px, py);
+            }
+            lastX = px;
+        }
+        if (chartFill.isEmpty()) return;
+        chartFill.lineTo(lastX, bottom);
+        chartFill.lineTo(firstX, bottom);
+        chartFill.close();
+        fill.setColor(Ui.alpha(color, 0.18f));
+        c.drawPath(chartFill, fill);
+        chartStroke.setColor(color);
+        chartStroke.setStrokeWidth(3 * k);
+        c.drawPath(chartLine, chartStroke);
     }
 
     /** A poster: rounded, growing a little when focused (the tvOS focus), its title and service under it. */
@@ -2457,7 +2557,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         c.drawText(usageTotal, x - 4 * k, r.top + 136 * k, usageBig);
         long most = usage.isEmpty() ? 1 : Math.max(1, usage.get(0).ms);
-        float barLeft = x + 320 * k, barRight = right - 150 * k;
+        float barLeft = x + 200 * k, barRight = right - 130 * k;
         for (int i = 0; i < usageLabels.length && i < usage.size(); i++) {
             float base = r.top + (206 + 54 * i) * k, mid = base - Ui.cap(cardText) / 2;
             c.drawText(usageLabels[i], x, base, cardText);

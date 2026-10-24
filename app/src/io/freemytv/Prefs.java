@@ -82,13 +82,22 @@ final class Prefs {
         if (!language().equals(before)) Ui.applyLanguage();
     }
 
+    /**
+     * Writes go to the file as it is now: each process keeps its own copy in memory, and a write from a stale copy (the
+     * main process's) would put back what the other one changed (a theme picked in the Control Center went back).
+     */
+    @SuppressWarnings("deprecation")
+    private static SharedPreferences fresh() {
+        return app.getSharedPreferences("settings", Context.MODE_MULTI_PROCESS);
+    }
+
     private static void put(String key, String value) {
-        sp().edit().putString(key, value).apply();
+        fresh().edit().putString(key, value).apply();
         version++;
     }
 
     private static void put(String key, boolean value) {
-        sp().edit().putBoolean(key, value).apply();
+        fresh().edit().putBoolean(key, value).apply();
         version++;
     }
 
@@ -126,7 +135,7 @@ final class Prefs {
     static String longitude() { return sp().getString("longitude", Config.LONGITUDE); }
 
     static void setCity(String name, String latitude, String longitude) {
-        sp().edit().putString("city", name).putString("latitude", latitude).putString("longitude", longitude).apply();
+        fresh().edit().putString("city", name).putString("latitude", latitude).putString("longitude", longitude).apply();
         version++;
     }
 
@@ -177,17 +186,17 @@ final class Prefs {
     // No version++ for the sleep settings: HomeActivity would rebuild the home screen and fetch the weather again for a
     // timer; HomeView reads what it needs on resume and every 15 s (updateSleep).
     static void setSleepAt(long at, long from) {
-        sp().edit().putLong("sleepAt", at).putLong("sleepFrom", from).apply();
+        fresh().edit().putLong("sleepAt", at).putLong("sleepFrom", from).apply();
     }
 
     /** The sleep timer's minutes left on screen: over any app (SleepOverlay), or where this TV can't, on the home screen. */
     static boolean sleepShown() { return sp().getBoolean("sleepShown", true); }
-    static void setSleepShown(boolean on) { sp().edit().putBoolean("sleepShown", on).apply(); }
+    static void setSleepShown(boolean on) { fresh().edit().putBoolean("sleepShown", on).apply(); }
 
     /** Where it shows over other apps: SleepOverlay's places, the top center first. */
     static int sleepPlace() { return sp().getInt("sleepPlace", 0); }
 
-    static void setSleepPlace(int place) { sp().edit().putInt("sleepPlace", place).apply(); }
+    static void setSleepPlace(int place) { fresh().edit().putInt("sleepPlace", place).apply(); }
 
     // MARK: - Top buttons
 

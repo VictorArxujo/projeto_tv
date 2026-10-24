@@ -89,9 +89,15 @@ final class Trending {
                     loaded = true;
                     File list = listFile();
                     if (list.exists()) {
-                        fetchedAt = list.lastModified();
-                        items = build(new JSONArray(read(new FileInputStream(list))));
-                        tell();
+                        try {
+                            JSONArray saved = new JSONArray(read(new FileInputStream(list)));
+                            items = build(saved);
+                            tell();
+                            // Only a whole list counts as fresh: one whose images are gone is fetched again now.
+                            if (complete(saved)) fetchedAt = list.lastModified();
+                        } catch (Exception e) {
+                            AppLog.w("trending: saved list unreadable: " + e.getMessage());
+                        }
                     }
                 }
                 if (System.currentTimeMillis() - fetchedAt > EVERY) {
@@ -182,8 +188,19 @@ final class Trending {
         return out;
     }
 
+    /** In the app's own files, not the cache: Android may empty the cache, and the list would show without images. */
     private File posterFile(String path) {
-        return new File(new File(c.getCacheDir(), "posters"), path.replaceAll("[^A-Za-z0-9._-]", ""));
+        return new File(new File(c.getFilesDir(), "trending-images"), path.replaceAll("[^A-Za-z0-9._-]", ""));
+    }
+
+    /** Every poster and scene of a saved list is on disk. */
+    private boolean complete(JSONArray list) {
+        for (int i = 0; i < list.length(); i++) {
+            JSONObject o = list.optJSONObject(i);
+            if (o == null || !posterFile(o.optString("poster")).exists()) return false;
+            if (o.has("scene") && !posterFile(o.optString("scene")).exists()) return false;
+        }
+        return list.length() > 0;
     }
 
     private void download(String base, String path) throws IOException {
