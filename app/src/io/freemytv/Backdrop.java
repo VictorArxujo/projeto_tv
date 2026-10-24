@@ -25,7 +25,7 @@ import android.graphics.Shader;
 final class Backdrop {
     /** The UI's size against 1920×1080 (at most 1): nothing is built bigger than the screen can show. */
     private static final float UI_SCALE = uiScale();
-    static final int W = ui(1920), H = ui(1080), FW = 192, FH = 108, GW = 480, GH = 270;
+    static final int W = ui(1920), H = ui(1080), FW = 192, FH = 108, GW = 480, GH = 270, VW = ui(960), VH = ui(540);
     /** The cards at their focused size (1.05×): the wide one and the two tall ones. */
     static final int WIDE_W = ui(1092), WIDE_H = ui(464), TALL_W = ui(336), TALL_H = ui(464);
 
@@ -99,7 +99,8 @@ final class Backdrop {
         Canvas c = new Canvas(out);
         if (forLight) {
             // Light design: everything comes from the photo without scrims.
-            Bitmap wide = card(out, WIDE_W, WIDE_H), tall = card(out, TALL_W, TALL_H);
+            // Vivid backgrounds (Bing's photo, the featured title) never show on the picks' cards.
+            Bitmap wide = vivid ? null : card(out, WIDE_W, WIDE_H), tall = vivid ? null : card(out, TALL_W, TALL_H);
             int[] frost = reduce(out, FW, FH, 3, 3);
             int[] light = whiten(frost.clone(), 0.82f);
             int[] glass = reduce(out, GW, GH, 2, 2);
@@ -107,11 +108,14 @@ final class Backdrop {
             int[] night = darken(frost.clone(), 0.76f);
             int[] nightGlass = darken(glass, 0.56f);
             if (own) {
-                int[] sharp = reduce(out, GW, GH, 1, 1);
-                int[] lightBg = vivid ? ramp(sharp.clone(), 0.55f, 0.12f, true) : ramp(sharp.clone(), 0.82f, 0.45f, true);
-                int[] nightBg = vivid ? ramp(sharp, 0.6f, 0.25f, false) : ramp(sharp, 0.76f, 0.5f, false);
+                // Vivid ones are seen as they are, so they keep twice the resolution (960 × 540, unblurred): at 480 × 270
+                // stretched to the screen, a film's scene looked soft.
+                int bw = vivid ? VW : GW, bh = vivid ? VH : GH;
+                int[] sharp = reduce(out, bw, bh, 1, vivid ? 0 : 1);
+                int[] lightBg = vivid ? ramp(sharp.clone(), bw, bh, 0.55f, 0.12f, true) : ramp(sharp.clone(), bw, bh, 0.82f, 0.45f, true);
+                int[] nightBg = vivid ? ramp(sharp, bw, bh, 0.6f, 0.25f, false) : ramp(sharp, bw, bh, 0.76f, 0.5f, false);
                 out.recycle();
-                return new Backdrop(null, frost, null, wide, tall, light, lightGlass, night, nightGlass, lightBg, nightBg, GW, GH);
+                return new Backdrop(null, frost, null, wide, tall, light, lightGlass, night, nightGlass, lightBg, nightBg, bw, bh);
             }
             out.recycle();
             return new Backdrop(null, frost, null, wide, tall, light, lightGlass, night, nightGlass);
@@ -225,14 +229,14 @@ final class Backdrop {
     }
 
     /** Whitens (or darkens) by `left` up to 45% of the width, easing to `right` by 70% (a GW × GH image). */
-    private static int[] ramp(int[] px, float left, float right, boolean light) {
-        int[] col = new int[GH];
-        for (int x = 0; x < GW; x++) {
-            float t = Math.max(0, Math.min(1, (x / (float) GW - 0.45f) / 0.25f));
+    private static int[] ramp(int[] px, int w, int h, float left, float right, boolean light) {
+        int[] col = new int[h];
+        for (int x = 0; x < w; x++) {
+            float t = Math.max(0, Math.min(1, (x / (float) w - 0.45f) / 0.25f));
             float a = left + (right - left) * t * t * (3 - 2 * t);
-            for (int y = 0; y < GH; y++) col[y] = px[y * GW + x];
+            for (int y = 0; y < h; y++) col[y] = px[y * w + x];
             if (light) whiten(col, a); else darken(col, a);
-            for (int y = 0; y < GH; y++) px[y * GW + x] = col[y];
+            for (int y = 0; y < h; y++) px[y * w + x] = col[y];
         }
         return px;
     }

@@ -7,6 +7,7 @@ import android.content.SharedPreferences;
 import android.content.pm.LauncherApps;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.BitmapShader;
 import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
@@ -89,7 +90,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     /** Blur radii of the shadow and shadowDeep paints (Shadows needs them to draw the same blur on older TVs). */
     private static final float SHADOW_BLUR = 26, DEEP_BLUR = 30;
     private static final int SKY = 0, HERO = 1, STATUS = 2, PLATTER = 3, TILES = 4, DRAWER = 5, SHEET = 6, TOAST = 7, DASH = 8;
-    private static final int Z_STATUS = 0, Z_HERO = 1, Z_SHELF = 2, Z_DRAWER = 3, Z_MUSIC = 6, Z_DASH = 7;
+    private static final int Z_STATUS = 0, Z_HERO = 1, Z_SHELF = 2, Z_DRAWER = 3, Z_MUSIC = 6, Z_DASH = 7, Z_FEATURE = 10;
     private static final ExecutorService LOADER = Executors.newSingleThreadExecutor();
     // Light design (the L_ constants): title, tab bar, three recommendation cards and the shelf.
     // The tab bar is a 68 px capsule; the cards sit on the 5-column grid (the wide one spans 3).
@@ -250,6 +251,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private Paint labelPaint, metaPaint, clockPaint, buttonPaint, capsuleText, tipPaint, quotePaint, staleQuote;
     private Paint rowTitle, drawerLabel, cardTitle, cardText, cardDim, cardDimRight, bigTemp, hourPaint, hourTemp;
     private Paint lNews, newsAccent, lMusicTitle, lMusicArtist, lMusicTime, lMusicLeft;
+    private Paint lClockSmall, lFeatureLabel, lFeatureTitle, lFeatureLine, lFeatureButton;
     private Paint pricePaint, changePaint, sheetTitle;
     private Paint pageHead, pageText, pageDim, panelTitle, tileLabel, tileValue;
     private TextPaint titlePaint, gridLabel, toastPaint;
@@ -434,6 +436,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         data.addListener(this);
         recs.addListener(this);
         music.start();
+        handler.removeCallbacks(featureNext);
+        handler.postDelayed(featureNext, FEATURE_MS);
         trendingSource.setListener(this::onTrending);
         trendingSource.refreshIfStale();
         data.refreshIfStale();
@@ -468,6 +472,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         recs.removeListener(this);
         music.stop();
         handler.removeCallbacks(progressTick);
+        handler.removeCallbacks(featureNext);
         if (tvInputs != null) tvInputs.unregisterCallback(inputCallback);
     }
 
@@ -641,6 +646,13 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         lWeather = Ui.text(Ui.medium, 34 * k, L_DIM);
         lClockQuote = Ui.numbers(Ui.medium, 28 * k, L_DIM);
         lNews = Ui.text(Ui.medium, 28 * k, L_DIM);
+        lClockSmall = Ui.numbers(Ui.light, 104 * k, L_INK);
+        lClockSmall.setLetterSpacing(-0.01f);
+        lFeatureLabel = Ui.text(Ui.semibold, 22 * k, L_DIM);
+        lFeatureLabel.setLetterSpacing(0.08f);
+        lFeatureTitle = Ui.text(Ui.displaySemibold, 58 * k, L_INK);
+        lFeatureLine = Ui.text(Ui.medium, 26 * k, L_DIM);
+        lFeatureButton = Ui.text(Ui.semibold, 26 * k, L_INK);
         lMusicTitle = Ui.text(Ui.semibold, 27 * k, L_INK);
         lMusicArtist = Ui.text(Ui.medium, 23 * k, L_DIM);
         lMusicTime = Ui.numbers(Ui.medium, 19 * k, L_DIM);
@@ -709,7 +721,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (reorderAnim) tilesMoving |= stepReorder(dt, up);
         boolean statusMoving = step(statusFocus, dt);
         boolean heroMoving = heroFocus.step(dt);
-        boolean topMoving = step(topFocus, dt), cardsMoving = step(cardFocus, dt) | step(musicFocus, dt);
+        boolean topMoving = step(topFocus, dt), cardsMoving = step(cardFocus, dt) | step(musicFocus, dt) | featureFocus.step(dt);
         if (topMoving) status.invalidate();
         heroMoving |= topMoving | cardsMoving;
         boolean drawerItemsMoving = step(drawerFocus, dt);
@@ -1040,6 +1052,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         lClockQuote.setColor(tone(L_DIM, 0xFF98989D));
         lNews.setColor(tone(L_DIM, 0xFF98989D));
         lMusicTitle.setColor(tone(L_INK, WHITE));
+        lClockSmall.setColor(tone(L_INK, WHITE));
+        lFeatureLabel.setColor(tone(L_DIM, 0xFF98989D));
+        lFeatureTitle.setColor(tone(L_INK, WHITE));
+        lFeatureLine.setColor(tone(L_DIM, 0xFFC7C7CC));
         lMusicArtist.setColor(tone(L_DIM, 0xFF98989D));
         lMusicTime.setColor(tone(L_DIM, 0xFF98989D));
         lMusicLeft.setColor(tone(L_DIM, 0xFF98989D));
@@ -2023,8 +2039,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** Under the clock and the weather: the election, when one is near, or else the latest headline. */
     private void drawNews(Canvas c) {
+        drawNews(c, L_QUOTES_BASE);
+    }
+
+    private void drawNews(Canvas c, float base) {
         makeNews();
-        if (!newsLine.isEmpty()) c.drawText(newsLine, MARGIN * k, L_QUOTES_BASE * k, lNews);
+        if (!newsLine.isEmpty()) c.drawText(newsLine, MARGIN * k, base * k, lNews);
     }
 
     /** The latest headlines from the news feed, under the election's line when one is near. */
@@ -2057,6 +2077,143 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (!election.isEmpty()) s.append(' ').append(election).append('.');
         for (String h : data.headlines) s.append(' ').append(h).append('.');
         return s.toString();
+    }
+
+    // MARK: - The featured title (with a TMDB key and the clock home screen): the home screen's top shelf
+
+    // Its scene is the background (whitened like Bing's photo), and over the shelf: "TRENDING · NETFLIX", the title, a
+    // line of its overview and the Watch button, with a dot per title. A new one every 20 s; ← → on the button too.
+    private static final long FEATURE_MS = 20_000;
+    private List<Trending.Item> featured = new ArrayList<>();
+    private final Spring featureFocus = new Spring(0.32f, 0.78f, 0);
+    private int featureIndex;
+    private Trending.Item featureFor;   // the one shown (its scene follows as soon as it's built)
+    private Backdrop featureBackdrop;
+    private boolean featureBuilding;
+    private String featureLabel = "", featureTitle = "", featureLine = "", featureWatch = "";
+    private final RectF featureButton = new RectF();
+    private final Runnable featureNext = new Runnable() {
+        @Override public void run() {
+            if (!running) return;
+            if (zone != Z_FEATURE && featureOn() && featured.size() > 1) showFeature(featureIndex + 1);
+            handler.postDelayed(this, FEATURE_MS);
+        }
+    };
+
+    private boolean featureOn() {
+        return !picksOn() && !featured.isEmpty() && Recs.hasKey(getContext());
+    }
+
+    // Built scenes, at most three (the one shown, the next and the previous): a change is instant when it's here.
+    private final java.util.Map<Trending.Item, Backdrop> scenes = new java.util.LinkedHashMap<>();
+
+    /** Shows title i (wrapping) at once: its text now, its scene as soon as it's built (it fades in). */
+    private void showFeature(int i) {
+        int n = featured.size();
+        if (n == 0) return;
+        featureIndex = ((i % n) + n) % n;
+        featureFor = featured.get(featureIndex);
+        makeFeatureText();
+        heroDirty = true;
+        spoken.focusMoved();
+        wake();
+        Backdrop b = scenes.get(featureFor);
+        if (b != null && b != featureBackdrop) {
+            featureBackdrop = b;
+            if (running) updatePicks();
+        }
+        buildScenes();
+    }
+
+    /** Builds the shown title's scene, then the next one's, off the main thread, one at a time. */
+    private void buildScenes() {
+        if (featured.isEmpty() || featureBuilding) return;
+        int n = featured.size();
+        Trending.Item want = null;
+        for (int d = 0; d < 2 && want == null; d++) {
+            Trending.Item t = featured.get((featureIndex + d) % n);
+            if (t.scene != null && !scenes.containsKey(t)) want = t;
+        }
+        if (want == null) return;
+        featureBuilding = true;
+        Trending.Item target = want;
+        LOADER.execute(() -> {
+            Backdrop b = null;
+            try {
+                Bitmap src = BitmapFactory.decodeFile(target.scene.getPath());
+                if (src != null) b = Backdrop.make(src, true, true, true);
+            } catch (RuntimeException | OutOfMemoryError e) {
+                AppLog.w("featured scene: " + e.getMessage());
+            }
+            Backdrop built = b;
+            handler.post(() -> {
+                featureBuilding = false;
+                if (built == null || !featured.contains(target)) return;
+                scenes.put(target, built);
+                Trending.Item next = featured.get((featureIndex + 1) % featured.size());
+                java.util.Iterator<Trending.Item> it = scenes.keySet().iterator();
+                while (scenes.size() > 3 && it.hasNext()) {
+                    Trending.Item old = it.next();
+                    if (old != featureFor && old != next) it.remove();
+                }
+                if (target == featureFor) {
+                    featureBackdrop = built;
+                    if (running) updatePicks();
+                }
+                buildScenes();
+            });
+        });
+    }
+
+    private void makeFeatureText() {
+        Trending.Item t = featureFor;
+        if (t == null || lFeatureTitle == null) return;
+        String service = serviceOf(t);
+        featureLabel = (service.isEmpty() ? Ui.tr("Trending") : Ui.trf("Trending · {service}", "service", service))
+                .toUpperCase(Ui.locale());
+        featureTitle = fit(t.title, lFeatureTitle, 1100 * k);
+        featureLine = fit(t.overview, lFeatureLine, 1000 * k);
+        featureWatch = Ui.tr("Watch");
+    }
+
+    private void drawFeature(Canvas c) {
+        if (featureFor == null) return;
+        if (featureTitle.isEmpty()) makeFeatureText();
+        float x = MARGIN * k;
+        c.drawText(featureLabel, x, 584 * k, lFeatureLabel);
+        c.drawText(featureTitle, x - Ui.leftBearing(lFeatureTitle, featureTitle), 650 * k, lFeatureTitle);
+        if (!featureLine.isEmpty()) c.drawText(featureLine, x, 694 * k, lFeatureLine);
+        // The Watch button: glass at rest, white when focused (it grows a little, the tvOS focus).
+        float f = Ui.clamp(featureFocus.value), s = 1 + 0.05f * f, bh = 58 * k, icon = 24 * k;
+        float iw = Symbols.width(getContext(), "play", icon), bw = 34 * k + iw + 12 * k + lFeatureButton.measureText(featureWatch) + 34 * k;
+        featureButton.set(x, 716 * k, x + bw, 716 * k + bh);
+        cell.set(featureButton.centerX() - bw * s / 2, featureButton.centerY() - bh * s / 2,
+                featureButton.centerX() + bw * s / 2, featureButton.centerY() + bh * s / 2);
+        if (f > 0.01f) {
+            tmp.set(cell);
+            tmp.offset(0, 8 * k * f);
+            shadow.setColor(Ui.alpha(0xFF000000, tone(0.2f, 0.4f) * f));
+            shadows.draw(c, tmp, cell.height() / 2, SHADOW_BLUR * k, shadow);
+        }
+        fill.setShader(null);
+        fill.setColor(blend(tone(0x24000000, 0x33FFFFFF), 0xFFFFFFFF, f));
+        c.drawRoundRect(cell, cell.height() / 2, cell.height() / 2, fill);
+        int ink = blend(tone(L_INK, WHITE), L_INK, f);
+        float cx = cell.left + 34 * k * s;
+        Symbols.draw(getContext(), c, "play", cx + iw / 2, cell.centerY(), icon * s, ink);
+        lFeatureButton.setColor(ink);
+        c.drawText(featureWatch, cx + iw + 12 * k, cell.centerY() + Ui.halfCap(lFeatureButton), lFeatureButton);
+        // A dot per title, the one shown longer (like the tvOS top shelf's page dots).
+        int n = featured.size(), shown = Math.max(0, featured.indexOf(featureFor));
+        if (n < 2) return;
+        float dx = featureButton.right + 36 * k, cy = featureButton.centerY(), r = 5 * k;
+        for (int i = 0; i < n; i++) {
+            fill.setColor(i == shown ? tone(0xCC1D1D1F, 0xE6FFFFFF) : tone(0x401D1D1F, 0x59FFFFFF));
+            float w = i == shown ? 26 * k : 2 * r;
+            tmp.set(dx, cy - r, dx + w, cy + r);
+            c.drawRoundRect(tmp, r, r, fill);
+            dx += w + 10 * k;
+        }
     }
 
     // MARK: - The drawer's second floor (↓ again from the drawer): Trending, exchange rates and today's TV time
@@ -2124,6 +2281,17 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             if (b != null) shaders[i] = new BitmapShader(b, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
         }
         posterShaders = shaders;
+        // Featured on the home screen: the ones with a scene, those an installed app streams first.
+        List<Trending.Item> f = new ArrayList<>();
+        for (Trending.Item t : list) if (t.scene != null && t.pkg != null) f.add(t);
+        for (Trending.Item t : list) if (t.scene != null && t.pkg == null && f.size() < 5) f.add(t);
+        featured = f.size() > 5 ? new ArrayList<>(f.subList(0, 5)) : f;
+        // A new list (new items): its scenes are built again, from the first title.
+        scenes.clear();
+        featureFor = null;
+        featureBackdrop = null;
+        featureIndex = 0;
+        updatePicks();
         dashGeneration = -1;
         dashIndex = Math.min(dashIndex, Math.max(0, list.size() - 1));
         dashDirty = true;
@@ -2320,6 +2488,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         boolean topChanged = aim(topFocus, !sheetOpen && zone == Z_TOP ? topIndex : -1, snap);
         heroChanged |= aim(cardFocus, !sheetOpen && zone == Z_CARDS ? cardIndex : -1, snap) | topChanged;
         heroChanged |= aim(musicFocus, !sheetOpen && zone == Z_MUSIC ? musicIndex : -1, snap);
+        float ft = !sheetOpen && zone == Z_FEATURE ? 1 : 0;
+        if (featureFocus.target != ft) {
+            featureFocus.target = ft;
+            heroChanged = true;
+        }
+        if (snap) featureFocus.snap(ft);
         statusChanged |= topChanged;
         tilesDirty |= snap || tilesChanged;
         statusDirty |= snap || statusChanged;
@@ -3087,6 +3261,16 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             music.command(musicIndex);
             return;
         }
+        if (!sheetOpen && zone == Z_FEATURE) {
+            Trending.Item t = featureFor;
+            if (t == null) return;
+            click.open();
+            if (t.pkg == null || !HomeApps.open(activity, HomeApps.app(t.pkg, t.title), this, Math.round(featureButton.left),
+                    Math.round(featureButton.top), Math.round(featureButton.width()), Math.round(featureButton.height()))) {
+                showToast(Ui.trf("Couldn't open {app}.", "app", t.title));
+            }
+            return;
+        }
         if (!sheetOpen && zone == Z_DASH) {
             if (dashIndex >= trending.size()) return;
             Trending.Item t = trending.get(dashIndex);
@@ -3415,6 +3599,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             return;
         }
         for (int i = 0; i < 3 + lightButtons.size(); i++) out.add(a11yId(Z_TOP, i));
+        if (featureOn()) out.add(a11yId(Z_FEATURE, 0));
         if (musicOn()) for (int i = 0; i < 3; i++) out.add(a11yId(Z_MUSIC, i));
         if (dash.target > 0) for (int i = 0; i < trending.size(); i++) out.add(a11yId(Z_DASH, i));
         for (int i = 0; i < Math.min(3, cards.size()); i++) out.add(a11yId(Z_CARDS, i));
@@ -3436,6 +3621,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 if (i >= 3) return label(lightButtons, i - 3);
                 return Ui.trf("{name}, tab {i} of {n}", "name", tabs()[i], "i", i + 1, "n", 3);
             case Z_CARDS: return i < cards.size() ? pickText(cards.get(i)) : "";
+            case Z_FEATURE:
+                return featureFor == null ? "" : Ui.tr("Watch") + ", " + featureFor.title + ", " + featureLabel;
             case Z_DASH:
                 if (i >= trending.size()) return "";
                 return trending.get(i).title + (dashApps[i].isEmpty() ? "" : ", " + dashApps[i]);
@@ -3489,6 +3676,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 a11yRect.set(topRects[i]);
                 dy = (i < 3 ? heroLayer : status).getTranslationY();
                 break;
+            case Z_FEATURE:
+                if (!featureOn()) return false;
+                a11yRect.set(featureButton);
+                dy = heroLayer.getTranslationY();
+                break;
             case Z_DASH:
                 if (i >= trending.size() || dash.target <= 0) return false;
                 a11yRect.set(posterRects[i]);
@@ -3538,6 +3730,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             case Z_TOP: return a11yId(Z_TOP, topIndex);
             case Z_MUSIC: return a11yId(Z_MUSIC, musicIndex);
             case Z_DASH: return trending.isEmpty() ? -1 : a11yId(Z_DASH, dashIndex);
+            case Z_FEATURE: return a11yId(Z_FEATURE, 0);
             case Z_CARDS: return cardIndex < cards.size() ? a11yId(Z_CARDS, cardIndex) : -1;
             case Z_SHELF: return shelf.isEmpty() ? -1 : a11yId(Z_SHELF, shelfIndex);
             case Z_DRAWER: return drawerItems.isEmpty() ? -1 : a11yId(Z_DRAWER, drawerIndex);
@@ -3605,6 +3798,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 if (i >= 3 || !musicOn()) return;
                 if (drawerOpen) closeDrawer();
                 musicIndex = i;
+                break;
+            case Z_FEATURE:
+                if (!featureOn()) return;
+                if (drawerOpen) closeDrawer();
                 break;
             case Z_DASH:
                 if (i >= trending.size()) return;
@@ -3724,10 +3921,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (picksOn()) for (Recs.Pick p : recs.wanted()) recs.backdrop(p);
         // Picks bring their own background; without them (no TMDB key), your photo if there is one.
         boolean own = !picksOn() && Photos.on(getContext());
-        // Without picks or photos: Bing's photo of the day (bing_wallpaper), or the gradient.
+        // Without picks or photos: the featured title's scene once it's built, else Bing's photo of the day
+        // (bing_wallpaper), or the gradient.
+        boolean feature = !own && featureOn();
+        if (feature && featureFor == null) showFeature(featureIndex);
+        else if (feature) buildScenes();
         boolean bing = !picksOn() && !own && Wallpaper.on();
-        Backdrop b = own ? Photos.backdrop(getContext(), ownReady) : bing ? Wallpaper.backdrop(getContext(), ownReady)
-                : cards.isEmpty() ? null : recs.backdrop(cards.get(0));
+        Backdrop b = own ? Photos.backdrop(getContext(), ownReady) : feature && featureBackdrop != null ? featureBackdrop
+                : bing ? Wallpaper.backdrop(getContext(), ownReady) : cards.isEmpty() ? null : recs.backdrop(cards.get(0));
         if (b != null || (cards.isEmpty() && !own && !bing)) showBackdrop(b);
         heroDirty = true;
         spoken.focusMoved();    // new picks under the focused card
@@ -3786,6 +3987,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     private void drawLightTop(Canvas c) {
         applyTone();
+        if (featureOn()) {
+            drawTabs(c, 0);
+            drawClock(c, lClockSmall, 288, 392, 448);
+            drawNews(c, 502);
+            drawFeature(c);
+            if (musicOn()) drawMusic(c);
+            return;
+        }
         if (!picksOn()) {
             drawTabs(c, 0);
             drawClock(c);
@@ -3842,9 +4051,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private void drawClock(Canvas c) {
+        drawClock(c, lClock, L_DATE_BASE, L_CLOCK_BASE, L_WEATHER_BASE);
+    }
+
+    /** The date, the time and the weather line, at these baselines (smaller above a featured title). */
+    private void drawClock(Canvas c, Paint clock, float dateBase, float clockBase, float weatherBase) {
         float x = MARGIN * k;
-        c.drawText(dateText, x - Ui.leftBearing(lDate, dateText), L_DATE_BASE * k, lDate);
-        c.drawText(clockText, x - Ui.leftBearing(lClock, clockText), L_CLOCK_BASE * k, lClock);
+        c.drawText(dateText, x - Ui.leftBearing(lDate, dateText), dateBase * k, lDate);
+        c.drawText(clockText, x - Ui.leftBearing(clock, clockText), clockBase * k, clock);
         HomeData.Weather wx = data.weather;
         if (!Prefs.weather() || Double.isNaN(wx.temp)) return;
         if (data.weatherAt != weatherLineAt || Prefs.version != weatherLinePrefs || !Ui.language.equals(weatherLineLanguage)) {
@@ -3854,7 +4068,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             weatherLine = HomeData.degrees(wx.temp) + "  " + HomeData.condition(wx.code, wx.isDay) + "   "
                     + HomeData.highLow(wx, "  ");
         }
-        float size = 40 * k, base = L_WEATHER_BASE * k;
+        float size = 40 * k, base = weatherBase * k;
         String symbol = Symbols.weather(wx.code, wx.isDay);
         float sw = Symbols.width(getContext(), symbol, size);
         Symbols.draw(getContext(), c, symbol, x + sw / 2, base - Ui.halfCap(lWeather), size, lWeather.getColor());
@@ -3972,7 +4186,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             case Z_SHELF:
                 // Up from an empty shelf too: move()'s older zones (the hero, the corner capsule) aren't drawn any more.
                 if (dy >= 0) return false;
-                if (cards.isEmpty() && musicOn()) {
+                if (cards.isEmpty() && featureOn()) {
+                    zone = Z_FEATURE;
+                } else if (cards.isEmpty() && musicOn()) {
                     zone = Z_MUSIC;
                     musicIndex = 1;
                 } else if (cards.isEmpty()) {
@@ -3994,6 +4210,16 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 } else {
                     zone = Z_SHELF;
                     if (!shelf.isEmpty()) shelfIndex = nearest(tileRects, tileRects.length, cardRects[cardIndex].centerX());
+                }
+                break;
+            case Z_FEATURE:
+                if (dx != 0) {
+                    showFeature(featureIndex + dx);
+                } else if (dy < 0) {
+                    zone = Z_TOP;
+                    topIndex = 0;
+                } else {
+                    zone = Z_SHELF;
                 }
                 break;
             case Z_MUSIC:
@@ -4019,6 +4245,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     if (cards.isEmpty() && musicOn() && topIndex >= 3) {   // from the round buttons, the card under them
                         zone = Z_MUSIC;
                         musicIndex = 1;
+                    } else if (cards.isEmpty() && featureOn()) {
+                        zone = Z_FEATURE;
                     } else if (cards.isEmpty()) {
                         zone = Z_SHELF;
                     } else {

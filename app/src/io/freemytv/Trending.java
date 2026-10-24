@@ -31,10 +31,12 @@ import java.util.concurrent.Executors;
 final class Trending {
     static final int MAX = 8;
     private static final long EVERY = 6 * 3_600_000L;
-    private static final String POSTERS = "https://image.tmdb.org/t/p/w342";
+    private static final String POSTERS = "https://image.tmdb.org/t/p/w342", SCENES = "https://image.tmdb.org/t/p/w1280";
 
     static final class Item {
         String title, kind, app, pkg;   // app: the HomeApps key of the service that streams it here (null: none installed)
+        String overview = "";
+        File scene;                     // its backdrop (16:9) on disk, for the home screen's featured title; null: none
         Bitmap poster;
     }
 
@@ -115,7 +117,7 @@ final class Trending {
     }
 
     private File listFile() {
-        return new File(c.getFilesDir(), "trending.json");
+        return new File(c.getFilesDir(), "trending-2.json");   // -2: with the scenes and overviews
     }
 
     /** This week's trending shows and movies, each with the first streaming provider here that an installed app plays. */
@@ -130,8 +132,9 @@ final class Trending {
             String kind = r.optString("media_type");
             String poster = r.optString("poster_path", "");
             if (!(kind.equals("tv") || kind.equals("movie")) || poster.isEmpty() || poster.equals("null")) continue;
+            String scene = r.optString("backdrop_path", "");
             JSONObject item = new JSONObject().put("title", r.optString(kind.equals("tv") ? "name" : "title"))
-                    .put("kind", kind).put("poster", poster);
+                    .put("kind", kind).put("poster", poster).put("overview", r.optString("overview", ""));
             try {
                 JSONObject here = recs.tmdb("/" + kind + "/" + r.getLong("id") + "/watch/providers")
                         .getJSONObject("results").optJSONObject(region);
@@ -146,7 +149,15 @@ final class Trending {
             } catch (Exception e) {
                 AppLog.w("trending providers: " + e.getMessage());
             }
-            downloadPoster(poster);
+            download(POSTERS, poster);
+            if (!scene.isEmpty() && !scene.equals("null")) {
+                try {
+                    download(SCENES, scene);
+                    item.put("scene", scene);
+                } catch (IOException e) {
+                    AppLog.w("trending scene: " + e.getMessage());
+                }
+            }
             out.put(item);
         }
         return out;
@@ -163,6 +174,9 @@ final class Trending {
             it.app = o.has("app") ? o.optString("app") : null;
             it.pkg = o.has("pkg") ? o.optString("pkg") : null;
             it.poster = decode(posterFile(o.optString("poster")));
+            it.overview = o.optString("overview", "");
+            File scene = o.has("scene") ? posterFile(o.optString("scene")) : null;
+            it.scene = scene != null && scene.exists() ? scene : null;
             out.add(it);
         }
         return out;
@@ -172,17 +186,17 @@ final class Trending {
         return new File(new File(c.getCacheDir(), "posters"), path.replaceAll("[^A-Za-z0-9._-]", ""));
     }
 
-    private void downloadPoster(String path) throws IOException {
+    private void download(String base, String path) throws IOException {
         File f = posterFile(path);
         if (f.exists()) return;
         //noinspection ResultOfMethodCallIgnored
         f.getParentFile().mkdirs();
         File part = new File(f.getPath() + ".part");
-        HttpURLConnection http = (HttpURLConnection) new URL(POSTERS + path).openConnection();
+        HttpURLConnection http = (HttpURLConnection) new URL(base + path).openConnection();
         http.setConnectTimeout(8000);
         http.setReadTimeout(15000);
         try {
-            if (http.getResponseCode() != 200) throw new IOException("poster HTTP " + http.getResponseCode());
+            if (http.getResponseCode() != 200) throw new IOException("image HTTP " + http.getResponseCode());
             try (InputStream in = http.getInputStream(); OutputStream out = new FileOutputStream(part)) {
                 byte[] buffer = new byte[16384];
                 int n;

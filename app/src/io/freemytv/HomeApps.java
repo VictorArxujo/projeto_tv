@@ -161,8 +161,19 @@ final class HomeApps {
         List<Item> items = new ArrayList<>();
         PackageManager pm = c.getPackageManager();
         int max = maxShelf(c);
+        // Live TV first, like the TVs' own home screens: it tunes the antenna (LIVE_TV), with the TV app's own art.
+        Intent live = liveTv(c);
+        String livePkg = live == null ? null : live.getComponent() != null ? live.getComponent().getPackageName() : live.getPackage();
+        if (livePkg != null) {
+            Item it = shortcut(LIVE_TV, "live", Ui.tr("light|Live TV"), "live_tv");
+            it.pkg = livePkg;
+            it.setTile(appTile(c, null, livePkg, 0));
+            items.add(it);
+        }
+        List<String> liveApps = java.util.Arrays.asList(LIVE_TV_APPS);
         for (String pkg : shelfPackages(c)) {
             if (items.size() >= max) break;
+            if (pkg.equals(livePkg) || liveApps.contains(pkg)) continue;   // already first
             Intent launch = launchIntent(pm, pkg);
             if (launch == null) continue;
             ResolveInfo ri = pm.resolveActivity(launch, 0);
