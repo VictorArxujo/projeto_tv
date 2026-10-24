@@ -7,10 +7,12 @@ import android.os.Looper;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.xmlpull.v1.XmlPullParser;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.StringReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
@@ -31,6 +33,8 @@ import java.util.concurrent.Executors;
  * Optional crypto prices (Binance, every 5 min) and weather/sunrise/sunset (Open-Meteo, every 30 min), cached
  * so the screen opens with numbers. Only fetched while the home screen or the screensaver is visible (the screen asks).
  * Neither source needs a key. Location and currency come from config.properties.
+ * Also optional: news headlines from an RSS feed (news_feed, every 30 min) and, in Brazil (state), the next election
+ * from the TSE's public calendar (every 6 h).
  */
 final class HomeData {
     static final String[] COINS = {"BTC", "ETH", "SOL", "USDT"};
@@ -54,7 +58,22 @@ final class HomeData {
         return "https://api.open-meteo.com/v1/forecast?latitude=" + Prefs.latitude() + "&longitude=" + Prefs.longitude() + WEATHER_QUERY;
     }
     private static final long PRICES_EVERY = 5 * 60_000L, WEATHER_EVERY = 30 * 60_000L;
+    private static final long NEWS_EVERY = 30 * 60_000L, ELECTION_EVERY = 6 * 3_600_000L;
+    /** The TSE's list of elections (dates, rounds, and the states each one covers). */
+    private static final String ELECTIONS_URL = "https://resultados.tse.jus.br/oficial/comum/config/ele-c.json";
+    private static final String NEWS_FEED = Config.NEWS_FEED.trim();
+    private static final String STATE = Config.STATE.trim().toLowerCase(Locale.ROOT);
+    private static final TimeZone BRASILIA = TimeZone.getTimeZone("America/Sao_Paulo");
+    private static final int MAX_HEADLINES = 12;
     interface Listener { void onData(); }
+
+    static boolean newsOn() {
+        return !NEWS_FEED.isEmpty();
+    }
+
+    static boolean electionsOn() {
+        return STATE.length() == 2;
+    }
 
     /** BTC, ETH and SOL; in Brazilian reais also the dollar (USDT/BRL), which Binance doesn't list for most currencies. */
     static int coinCount() {
@@ -84,6 +103,7 @@ final class HomeData {
     /** Settings changed (city, coins): fetch again now. */
     void settingsChanged() {
         pricesAt = 0;
+        newsAt = 0;
         weatherAt = 0;
         pricesFailedAt = 0;
         weatherFailedAt = 0;
@@ -143,6 +163,14 @@ final class HomeData {
     final double[] changes = {Double.NaN, Double.NaN, Double.NaN, Double.NaN};
     volatile long pricesAt, weatherAt;
     volatile Weather weather = new Weather();
+    volatile String[] headlines = new String[0];
+    /** Each headline's subtitle ("" when the feed has none), in the same order. */
+    volatile String[] summaries = new String[0];
+    volatile long newsAt, electionAt;
+    /** The next election here: its day (0:00 in Brasília; 0 = none), round (1 or 2) and the office on the ballot. */
+    volatile long electionDay;
+    volatile int electionRound;
+    volatile String electionOffice = "";
 
     private final SharedPreferences cache;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
@@ -150,6 +178,8 @@ final class HomeData {
     private final List<Listener> listeners = new ArrayList<>();
     private volatile boolean fetchingPrices, fetchingWeather;
     private volatile long pricesFailedAt, weatherFailedAt;
+    private volatile boolean fetchingNews, fetchingElection;
+    private volatile long newsFailedAt, electionFailedAt;
     /** The city of the forecast in memory: another process (ScreensaverAlone) can see the city change under it. */
     private volatile String weatherFor = "";
 
@@ -168,6 +198,18 @@ final class HomeData {
                 weather = parseWeather(w);
                 weatherAt = cache.getLong("weatherAt", 0);
                 weatherFor = weatherPlace();
+            }
+        } catch (Exception ignored) {}
+        try {
+            String n = cache.getString("news", null);
+            if (newsOn() && n != null && NEWS_FEED.equals(cache.getString("newsFeed", ""))) {
+                parseNews(n);
+                newsAt = cache.getLong("newsAt", 0);
+            }
+            String e = cache.getString("elections", null);
+            if (electionsOn() && e != null) {
+                parseElections(e);
+                electionAt = cache.getLong("electionAt", 0);
             }
         } catch (Exception ignored) {}
     }
@@ -205,6 +247,7 @@ final class HomeData {
                 }
             });
         }
+        refreshNews(now);
         boolean moved = !weatherPlace().equals(weatherFor);
         if (!fetchingWeather && (moved || now - weatherAt > WEATHER_EVERY || now < weatherAt) && !failedRecently(weatherFailedAt, now)) {
             fetchingWeather = true;
@@ -225,6 +268,137 @@ final class HomeData {
                 }
             });
         }
+    }
+
+    /** News and the election calendar: the same rules as above, on the same thread. */
+    private void refreshNews(long now) {
+        if (newsOn() && !fetchingNews && (now - newsAt > NEWS_EVERY || now < newsAt) && !failedRecently(newsFailedAt, now)) {
+            fetchingNews = true;
+            io.execute(() -> {
+                try {
+                    String body = get(NEWS_FEED);
+                    parseNews(body);
+                    newsAt = System.currentTimeMillis();
+                    cache.edit().putString("news", body).putLong("newsAt", newsAt).putString("newsFeed", NEWS_FEED).apply();
+                    notifyListeners();
+                } catch (Exception e) {
+                    newsFailedAt = System.currentTimeMillis();
+                    AppLog.w("news: " + e.getMessage());
+                } finally {
+                    fetchingNews = false;
+                }
+            });
+        }
+        if (electionsOn() && !fetchingElection && (now - electionAt > ELECTION_EVERY || now < electionAt)
+                && !failedRecently(electionFailedAt, now)) {
+            fetchingElection = true;
+            io.execute(() -> {
+                try {
+                    String body = get(ELECTIONS_URL);
+                    parseElections(body);
+                    electionAt = System.currentTimeMillis();
+                    cache.edit().putString("elections", body).putLong("electionAt", electionAt).apply();
+                    notifyListeners();
+                } catch (Exception e) {
+                    electionFailedAt = System.currentTimeMillis();
+                    AppLog.w("elections: " + e.getMessage());
+                } finally {
+                    fetchingElection = false;
+                }
+            });
+        }
+    }
+
+    /** The items of an RSS feed, in its order: each title and its subtitle (atom:subtitle, plain text; g1 has it). */
+    private void parseNews(String body) throws Exception {
+        XmlPullParser x = android.util.Xml.newPullParser();
+        x.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true);
+        x.setInput(new StringReader(body));
+        List<String> titles = new ArrayList<>(), subtitles = new ArrayList<>();
+        String title = null, subtitle = "";
+        boolean inItem = false;
+        for (int ev = x.getEventType(); ev != XmlPullParser.END_DOCUMENT && titles.size() < MAX_HEADLINES; ev = x.next()) {
+            if (ev == XmlPullParser.START_TAG && "item".equals(x.getName())) {
+                inItem = true;
+                title = null;
+                subtitle = "";
+            } else if (ev == XmlPullParser.END_TAG && "item".equals(x.getName())) {
+                inItem = false;
+                if (title != null && !title.isEmpty()) {
+                    titles.add(title);
+                    subtitles.add(subtitle);
+                }
+            } else if (ev == XmlPullParser.START_TAG && inItem && x.getNamespace().isEmpty() && "title".equals(x.getName())) {
+                title = x.nextText().replaceAll("\\s+", " ").trim();
+            } else if (ev == XmlPullParser.START_TAG && inItem && "subtitle".equals(x.getName())) {
+                subtitle = x.nextText().replaceAll("\\s+", " ").trim();
+            }
+        }
+        summaries = subtitles.toArray(new String[0]);
+        headlines = titles.toArray(new String[0]);
+    }
+
+    /**
+     * The first ordinary election from yesterday on that votes here: a federal one (President) anywhere, a state one
+     * (Governor) where its list of states has ours, a municipal one (Mayor) anywhere.
+     */
+    private void parseElections(String body) throws Exception {
+        JSONArray pleitos = new JSONObject(body).getJSONArray("pl");
+        SimpleDateFormat f = new SimpleDateFormat("dd/MM/yyyy", Locale.US);
+        f.setTimeZone(BRASILIA);
+        long from = System.currentTimeMillis() - 2 * 86_400_000L, best = 0;
+        int round = 0;
+        String office = "";
+        for (int i = 0; i < pleitos.length(); i++) {
+            JSONObject pl = pleitos.getJSONObject(i);
+            long day = f.parse(pl.getString("dt")).getTime();
+            if (day < from || (best != 0 && day >= best)) continue;
+            JSONArray es = pl.getJSONArray("e");
+            String found = "";
+            int t = 0;
+            for (int j = 0; j < es.length(); j++) {
+                JSONObject e = es.getJSONObject(j);
+                if (!e.optString("nm").contains("Ordinária")) continue;
+                String tp = e.optString("tp");
+                String o = tp.equals("8") ? "President" : tp.equals("3") ? "Mayor" : tp.equals("1") && covers(e, STATE) ? "Governor" : "";
+                // President wins over Governor: on the same ballot, the line names the one everybody votes for.
+                if (o.isEmpty() || found.equals("President")) continue;
+                found = o;
+                t = e.optInt("t", 1);
+            }
+            if (found.isEmpty()) continue;
+            best = day;
+            round = t;
+            office = found;
+        }
+        electionDay = best;
+        electionRound = round;
+        electionOffice = office;
+    }
+
+    private static boolean covers(JSONObject election, String state) {
+        JSONArray abr = election.optJSONArray("abr");
+        for (int i = 0; abr != null && i < abr.length(); i++) {
+            String cd = abr.optJSONObject(i) == null ? "" : abr.optJSONObject(i).optString("cd");
+            if (cd.equals(state) || cd.equals("br")) return true;
+        }
+        return false;
+    }
+
+    /**
+     * The election line, from 30 days before to the day after; "" otherwise. Polls are open 8:00 to 17:00, Brasília
+     * time, everywhere in Brazil; after that, the counting (the results come in the news).
+     */
+    String electionLine(long now) {
+        long day = electionDay;
+        if (day == 0 || electionOffice.isEmpty() || now < day - 30 * 86_400_000L || now >= day + 2 * 86_400_000L) return "";
+        String round = electionRound == 2 ? Ui.tr("Second round") : Ui.tr("First round");
+        String office = electionOffice.equals("President") ? Ui.tr("President")
+                : electionOffice.equals("Governor") ? Ui.tr("Governor") : Ui.tr("Mayor");
+        if (now >= day + 17 * 3_600_000L) return Ui.trf("Counting the votes: {round} for {office}", "round", round, "office", office);
+        if (now >= day) return Ui.trf("Election day: {round} for {office}, polls close at 5 PM", "round", round, "office", office);
+        String when = now >= day - 86_400_000L ? Ui.tr("tomorrow") : Ui.datePattern("format|EEEE, MMMM d").format(day);
+        return Ui.trf("{round} for {office}: {when}", "round", round, "office", office, "when", when);
     }
 
     private static boolean failedRecently(long at, long now) {
@@ -314,7 +488,7 @@ final class HomeData {
         return out;
     }
 
-    private static String get(String url) throws IOException {
+    static String get(String url) throws IOException {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setConnectTimeout(6000);
         c.setReadTimeout(6000);

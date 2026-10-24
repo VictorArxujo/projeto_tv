@@ -41,6 +41,7 @@ LON="$(number longitude -74.0060)"
 ASSIST=false; [ "$(prop disable_assistant false)" = "true" ] && ASSIST=true
 CRYPTO=false; [ "$(prop show_crypto true)" = "true" ] && CRYPTO=true
 ANIMATION=false; [ "$(prop hide_animation false)" = "true" ] && ANIMATION=true
+BING=false; [ "$(prop bing_wallpaper false)" = "true" ] && BING=true
 
 rm -rf out && mkdir -p out/gen/io/freemytv out/classes
 cat > out/gen/io/freemytv/Config.java <<EOF
@@ -63,6 +64,9 @@ final class Config {
     static final boolean DISABLE_ASSISTANT = $ASSIST;
     static final boolean SHOW_CRYPTO = $CRYPTO;
     static final boolean HIDE_ANIMATION = $ANIMATION;
+    static final String NEWS_FEED = "$(prop news_feed '')";
+    static final String STATE = "$(prop state '')";
+    static final boolean BING_WALLPAPER = $BING;
 }
 EOF
 

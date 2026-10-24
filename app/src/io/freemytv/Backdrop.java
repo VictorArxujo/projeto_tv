@@ -81,6 +81,11 @@ final class Backdrop {
      * right, so it still reads as your photo. The glass and the drawer stay as they are.
      */
     static Backdrop make(Bitmap src, boolean forLight, boolean own) {
+        return make(src, forLight, own, false);
+    }
+
+    /** `vivid` (Bing's photo of the day, Wallpaper): like your photo, but whitened (darkened at night) much less. */
+    static Backdrop make(Bitmap src, boolean forLight, boolean own, boolean vivid) {
         // Cropped to 16:9 at the source's resolution first, then filtered down (no step over 2×).
         Bitmap crop = center(src, (float) W / H);
         if (crop != src) src.recycle();
@@ -103,7 +108,8 @@ final class Backdrop {
             int[] nightGlass = darken(glass, 0.56f);
             if (own) {
                 int[] sharp = reduce(out, GW, GH, 1, 1);
-                int[] lightBg = ramp(sharp.clone(), 0.82f, 0.45f, true), nightBg = ramp(sharp, 0.76f, 0.5f, false);
+                int[] lightBg = vivid ? ramp(sharp.clone(), 0.55f, 0.12f, true) : ramp(sharp.clone(), 0.82f, 0.45f, true);
+                int[] nightBg = vivid ? ramp(sharp, 0.6f, 0.25f, false) : ramp(sharp, 0.76f, 0.5f, false);
                 out.recycle();
                 return new Backdrop(null, frost, null, wide, tall, light, lightGlass, night, nightGlass, lightBg, nightBg, GW, GH);
             }

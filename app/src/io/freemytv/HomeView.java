@@ -47,7 +47,7 @@ import java.util.function.Consumer;
  * The home screen, styled after the Apple TV app with the macOS 27 glass:
  *  - at the top left, the "For You" title and the tabs (Explore, Movies, Shows); at the top right, icon-only glass
  *    buttons (Live TV, HDMI Inputs, Settings), with the focused one's name below it, and the small crypto quotes
- *    (logo + price) at the right end of the tab row;
+ *    (logo + price) at the right end of the tab row; without quotes, under the clock, the election or a headline;
  *  - three cards with the titles recommended for right now in the selected tab (Recs, from TMDB); the background is
  *    the first card's photo, heavily blurred and almost white (Backdrop); without picks, one of your own photos
  *    (Photos) the same way, or else a light gradient;
@@ -100,6 +100,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private static final int L_INK = 0xFF1D1D1F, L_DIM = 0xFF6E6E73, L_FAINT = 0xFF8E8E93;
     private static String[] tabs;
     private static int tabsGeneration = -1;
+    private static boolean tabsPicks;
     private static final String[] TAB_KIND = {null, "movie", "tv"};
     private static final int Z_TOP = 4, Z_CARDS = 5;
 
@@ -248,7 +249,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     private Paint labelPaint, metaPaint, clockPaint, buttonPaint, capsuleText, tipPaint, quotePaint, staleQuote;
     private Paint rowTitle, drawerLabel, cardTitle, cardText, cardDim, cardDimRight, bigTemp, hourPaint, hourTemp;
+    private Paint lNews, newsAccent;
     private Paint pricePaint, changePaint, sheetTitle;
+    private Paint pageHead, pageText, pageDim, panelTitle, tileLabel, tileValue;
     private TextPaint titlePaint, gridLabel, toastPaint;
     private final Paint bitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint imagePaint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
@@ -494,19 +497,24 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         lightButtons.addAll(list);
         if (zone == Z_TOP && topIndex >= 3 + lightButtons.size()) {
             topIndex = 2 + lightButtons.size();
-            if (topIndex < 3 && !picksOn()) zone = Z_SHELF;   // without the picks the tabs can't hold focus
-            else if (topIndex < 3) selectTab(topIndex);
+            if (topIndex < 3 && picksOn()) selectTab(topIndex);
             retarget(true);
         }
         layoutLight();
         statusDirty = true;
     }
 
-    /** The tab names, made again only when the language changes (they are drawn on every frame). */
-    private static String[] tabs() {
-        if (tabsGeneration != Ui.generation) {
-            tabs = new String[] {Ui.tr("Explore"), Ui.tr("Movies"), Ui.tr("Shows")};
+    /**
+     * The tab names, made again only when the language changes (they are drawn on every frame). Without picks: Home,
+     * Apps and News, the home screen's pages (OK opens them).
+     */
+    private String[] tabs() {
+        boolean picks = picksOn();
+        if (tabsGeneration != Ui.generation || tabsPicks != picks) {
+            tabs = picks ? new String[] {Ui.tr("Explore"), Ui.tr("Movies"), Ui.tr("Shows")}
+                    : new String[] {Ui.tr("tab|Home"), Ui.tr("tab|Apps"), Ui.tr("News")};
             tabsGeneration = Ui.generation;
+            tabsPicks = picks;
         }
         return tabs;
     }
@@ -618,6 +626,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         lClock.setLetterSpacing(-0.01f);
         lWeather = Ui.text(Ui.medium, 34 * k, L_DIM);
         lClockQuote = Ui.numbers(Ui.medium, 28 * k, L_DIM);
+        lNews = Ui.text(Ui.medium, 28 * k, L_DIM);
+        newsAccent = Ui.text(Ui.semibold, 29 * k, 0xFF64D2FF);
         lightGradient = null;
         buttonPaint = Ui.text(Ui.semibold, 29 * k, INK);
         capsuleText = Ui.numbers(Ui.medium, 29 * k, 0xF2FFFFFF);
@@ -648,6 +658,13 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         changePaint.setTextAlign(Paint.Align.CENTER);
         sheetTitle = Ui.text(Ui.displaySemibold, 40 * k, 0xFFFFFFFF);
         sheetTitle.setTextAlign(Paint.Align.CENTER);
+        pageHead = Ui.text(Ui.semibold, 34 * k, 0xFFFFFFFF);
+        pageText = Ui.text(Ui.medium, 26 * k, 0xADFFFFFF);
+        pageDim = Ui.text(Ui.semibold, 30 * k, 0xFF64D2FF);
+        pageDim.setTextAlign(Paint.Align.CENTER);
+        panelTitle = Ui.text(Ui.displaySemibold, 36 * k, 0xFFFFFFFF);
+        tileLabel = Ui.text(Ui.semibold, 27 * k, 0xFFFFFFFF);
+        tileValue = Ui.text(Ui.medium, 23 * k, 0xADFFFFFF);
         gridLabel = new TextPaint(Ui.text(Ui.medium, 24 * k, 0x99FFFFFF));
         gridLabel.setTextAlign(Paint.Align.CENTER);
         toastPaint = new TextPaint(Ui.text(Ui.medium, 26 * k, 0xF2FFFFFF));
@@ -989,10 +1006,13 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         lCardMeta.setColor(tone(L_DIM, 0xFF98989D));
         lQuote.setColor(tone(L_FAINT, 0xB8FFFFFF));
         lTip.setColor(tone(L_INK, WHITE));
+        // The focused button's name sits on the photo itself: a soft halo keeps it readable.
+        lTip.setShadowLayer(14 * k, 0, 0, tone(0xE6FFFFFF, 0xCC000000));
         lDate.setColor(tone(L_DIM, 0xFF98989D));
         lClock.setColor(tone(L_INK, WHITE));
         lWeather.setColor(tone(L_DIM, 0xFF98989D));
         lClockQuote.setColor(tone(L_DIM, 0xFF98989D));
+        lNews.setColor(tone(L_DIM, 0xFF98989D));
         staleQuote.setColor(tone(L_FAINT, 0x99FFFFFF));
     }
 
@@ -1514,7 +1534,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             x += tw + gap;
         }
         float cardsTop = CARDS_TOP * k, split = left + (right - left) * 0.585f;
-        boolean wx = Prefs.weather(), qt = Prefs.quotes() && HomeData.active().length > 0;
+        boolean wx = Prefs.weather(), qt = quotesCardOn() || newsCardOn();
         // A card that is off gives its room to the other one.
         weatherCard.set(left, cardsTop, qt ? split - 16 * k : right, cardsTop + CARDS_H * k);
         quotesCard.set(wx ? split + 16 * k : left, cardsTop, right, cardsTop + CARDS_H * k);
@@ -1577,6 +1597,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         rowTitle.setColor(tone(L_DIM, 0xB3FFFFFF));
         cardTitle.setColor(tone(L_DIM, 0xB3FFFFFF));
         cardText.setColor(drawerInk(0.95f));
+        newsAccent.setColor(tone(0xFF0066CC, 0xFF64D2FF));
         cardDim.setColor(tone(L_DIM, 0xADFFFFFF));
         cardDimRight.setColor(tone(L_FAINT, 0x99FFFFFF));
         bigTemp.setColor(drawerInk(1));
@@ -1591,7 +1612,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         for (int i = 0; i < drawerItems.size(); i++) if (i != top) drawDrawerTile(c, i);
         if (top >= 0) drawDrawerTile(c, top);
         if (Prefs.weather()) drawWeatherCard(c, weatherCard);
-        if (Prefs.quotes() && HomeData.active().length > 0) drawQuotesCard(c, quotesCard);
+        if (quotesCardOn()) drawQuotesCard(c, quotesCard);
+        else if (newsCardOn()) drawNewsCard(c, quotesCard);
     }
 
     /** Square drawer button: symbol and name; an input with no device is dimmed. Focused: white, with dark text. */
@@ -1715,7 +1737,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
      * sunrise and sunset, "12 min ago").
      */
     private String drawerCardsKey() {
-        return data.weatherAt + "|" + data.pricesAt + "|" + Prefs.version + "|" + Ui.language + "|"
+        return data.weatherAt + "|" + data.pricesAt + "|" + data.newsAt + "|" + data.electionAt + "|" + Prefs.version + "|" + Ui.language + "|"
                 + Float.floatToIntBits(dark()) + "|" + System.currentTimeMillis() / 60_000;
     }
 
@@ -1773,6 +1795,84 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
     }
 
+    /** The drawer's second card: the crypto quotes, or else the news (and the election, when one is near). */
+    private static boolean quotesCardOn() {
+        return Prefs.quotes() && HomeData.active().length > 0;
+    }
+
+    private static boolean newsCardOn() {
+        return !quotesCardOn() && (HomeData.newsOn() || HomeData.electionsOn());
+    }
+
+    // The news, ellipsized to fit: made again only when the data, the minute, the language or the card's width change.
+    private String[] newsShown = new String[0];
+    private String newsElection = "", newsLine = "";
+    private long newsMinute = -1, newsSeenAt = -1, electionSeenAt = -1;
+    private int newsGeneration = -1;
+    private float newsCardW = -1;
+
+    private String fit(String text, Paint p, float width) {
+        fitPaint.set(p);
+        return TextUtils.ellipsize(text, fitPaint, Math.max(0, width), TextUtils.TruncateAt.END).toString();
+    }
+
+    private void makeNews() {
+        long now = System.currentTimeMillis(), minute = now / 60_000;
+        float cardW = quotesCard.width() - 68 * k;
+        if (minute == newsMinute && data.newsAt == newsSeenAt && data.electionAt == electionSeenAt
+                && Ui.generation == newsGeneration && cardW == newsCardW) return;
+        newsMinute = minute;
+        newsSeenAt = data.newsAt;
+        electionSeenAt = data.electionAt;
+        newsGeneration = Ui.generation;
+        newsCardW = cardW;
+        String election = data.electionLine(now);
+        String[] all = data.headlines;
+        newsElection = election.isEmpty() ? "" : fit(election, newsAccent, cardW);
+        String[] shown = new String[Math.min(all.length, election.isEmpty() ? 4 : 3)];
+        for (int i = 0; i < shown.length; i++) shown[i] = fit(all[i], cardText, cardW);
+        newsShown = shown;
+        newsLine = fit(!election.isEmpty() ? election : all.length > 0 ? all[0] : "", lNews, 1100 * k);
+    }
+
+    /** Under the clock and the weather: the election, when one is near, or else the latest headline. */
+    private void drawNews(Canvas c) {
+        makeNews();
+        if (!newsLine.isEmpty()) c.drawText(newsLine, MARGIN * k, L_QUOTES_BASE * k, lNews);
+    }
+
+    /** The latest headlines from the news feed, under the election's line when one is near. */
+    private void drawNewsCard(Canvas c, RectF r) {
+        drawerCard(c, r);
+        if (Ui.LEGACY) quotesSnapshot.draw(c, r, drawerCardsKey(), cc -> drawHeadlines(cc, r));
+        else drawHeadlines(c, r);
+    }
+
+    private void drawHeadlines(Canvas c, RectF r) {
+        makeNews();
+        float x = r.left + 34 * k, base = r.top + 110 * k;
+        c.drawText(Ui.tr("News"), x, r.top + 54 * k, cardTitle);
+        String stale = HomeData.staleness(data.newsAt, 30 * 60_000L);
+        if (!stale.isEmpty()) c.drawText(stale, r.right - 34 * k, r.top + 54 * k, cardDimRight);
+        if (!newsElection.isEmpty()) {
+            c.drawText(newsElection, x, base, newsAccent);
+            base += 52 * k;
+        }
+        for (String line : newsShown) {
+            c.drawText(line, x, base, cardText);
+            base += 52 * k;
+        }
+    }
+
+    /** The news card as TalkBack reads it: the election, then each headline. */
+    private String newsText() {
+        StringBuilder s = new StringBuilder(Ui.tr("News")).append('.');
+        String election = data.electionLine(System.currentTimeMillis());
+        if (!election.isEmpty()) s.append(' ').append(election).append('.');
+        for (String h : data.headlines) s.append(' ').append(h).append('.');
+        return s.toString();
+    }
+
     // MARK: - Focus
 
     /** Sets the springs' targets from the current focus (snap: no animation). */
@@ -1819,7 +1919,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         gridDirty = true;
     }
 
+    // The sheet shows one of these pages: All Apps, the news, the Control Center.
+    private static final int PAGE_APPS = 0, PAGE_NEWS = 1, PAGE_CONTROL = 2;
+    private int sheetKind = PAGE_APPS;
+
     private void openSheet() {
+        sheetKind = PAGE_APPS;
         sheetOpen = true;
         gridIndex = 0;
         scroll.snap(0);
@@ -1856,6 +1961,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private void drawSheet(Canvas c) {
+        if (sheetKind == PAGE_NEWS) {
+            drawNewsPage(c);
+            return;
+        }
+        if (sheetKind == PAGE_CONTROL) {
+            drawControlPanel(c);
+            return;
+        }
         c.drawColor(0xA8000000);
         float shift = scroll.value * GRID_ROW * k;
         c.drawText(Ui.tr("All Apps"), w / 2f, 124 * k - shift, sheetTitle);
@@ -1926,6 +2039,275 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             c.drawRoundRect(cell, r, r, rim);
             rim.setStrokeWidth(2.5f * k);
         }
+    }
+
+    // MARK: - Pages: the news and the Control Center (shown in the sheet, like All Apps)
+
+    /** Opens a page in the sheet: All Apps, the news or the Control Center. */
+    private void openPage(int kind) {
+        if (kind == PAGE_APPS) {
+            openSheet();
+            return;
+        }
+        if (drawerOpen) closeDrawer();
+        sheetKind = kind;
+        sheetOpen = true;
+        newsIndex = 0;
+        controlIndex = 0;
+        scroll.snap(0);
+        retarget(false);
+        sheet.target = 1;
+        gridDirty = true;
+        spoken.focusMoved();
+    }
+
+    /** The tabs without picks: Home (back to the shelf), Apps (All Apps) and News. */
+    private void openTab(int i) {
+        if (i == 1) {
+            openSheet();
+        } else if (i == 2) {
+            openPage(PAGE_NEWS);
+        } else {
+            zone = Z_SHELF;
+            retarget(false);
+        }
+    }
+
+    // The news page: the election on top, then each headline with its subtitle, a row each; ↑↓ scroll.
+    private static final float NEWS_ROW = 132, NEWS_LEFT = 240, NEWS_RIGHT = 1680, NEWS_VISIBLE = 5;
+    private int newsIndex;
+    private String[] pageTitles = new String[0], pageSummaries = new String[0];
+    private String pageElection = "";
+    private long pageSeenAt = -1, pageMinute = -1;
+    private int pageGeneration = -1;
+    private final RectF newsRow = new RectF();
+
+    private float newsTop() {
+        return (pageElection.isEmpty() ? 196 : 250) * k;
+    }
+
+    /** Where row i is now (scrolled). */
+    private RectF newsRowRect(int i) {
+        float y = newsTop() + (i - scroll.value) * NEWS_ROW * k;
+        newsRow.set(NEWS_LEFT * k, y, NEWS_RIGHT * k, y + (NEWS_ROW - 12) * k);
+        return newsRow;
+    }
+
+    private void makeNewsPage() {
+        long minute = System.currentTimeMillis() / 60_000;
+        if (data.newsAt == pageSeenAt && minute == pageMinute && Ui.generation == pageGeneration) return;
+        pageSeenAt = data.newsAt;
+        pageMinute = minute;
+        pageGeneration = Ui.generation;
+        String[] titles = data.headlines, subs = data.summaries;
+        float width = (NEWS_RIGHT - NEWS_LEFT - 64) * k;
+        String[] t = new String[titles.length], u = new String[titles.length];
+        for (int i = 0; i < titles.length; i++) {
+            t[i] = fit(titles[i], pageHead, width);
+            u[i] = fit(i < subs.length ? subs[i] : "", pageText, width);
+        }
+        pageTitles = t;
+        pageSummaries = u;
+        pageElection = data.electionLine(System.currentTimeMillis());
+    }
+
+    private void drawNewsPage(Canvas c) {
+        c.drawColor(0xE6101012);
+        makeNewsPage();
+        c.drawText(Ui.tr("News"), w / 2f, 124 * k, sheetTitle);
+        if (!pageElection.isEmpty()) c.drawText(pageElection, w / 2f, 196 * k, pageDim);
+        c.save();
+        c.clipRect(0, newsTop() - 16 * k, w, 1040 * k);   // no row cut by the screen's edge
+        for (int i = 0; i < pageTitles.length; i++) {
+            RectF r = newsRowRect(i);
+            if (r.bottom < 0 || r.bottom > 1040 * k) continue;
+            if (i == newsIndex) {
+                fill.setShader(null);
+                fill.setColor(0x26FFFFFF);
+                c.drawRoundRect(r, 28 * k, 28 * k, fill);
+            }
+            float x = r.left + 32 * k;
+            boolean sub = !pageSummaries[i].isEmpty();
+            c.drawText(pageTitles[i], x, r.top + (sub ? 52 : 72) * k, pageHead);
+            if (sub) c.drawText(pageSummaries[i], x, r.top + 94 * k, pageText);
+        }
+        c.restore();
+    }
+
+    private void moveNews(int dy) {
+        int n = data.headlines.length;
+        int next = Math.max(0, Math.min(n - 1, newsIndex + dy));
+        if (n == 0 || next == newsIndex) return;
+        newsIndex = next;
+        float target = scroll.target;
+        if (newsIndex < target) target = newsIndex;
+        else if (newsIndex > target + NEWS_VISIBLE - 1) target = newsIndex - NEWS_VISIBLE + 1;
+        scroll.target = Math.max(0, target);
+        gridDirty = true;
+        click.move();
+        spoken.focusMoved();
+        wake();
+    }
+
+    // The Control Center: a panel at the right, like tvOS's, with two columns of tiles.
+    private static final int CONTROLS = 6;
+    private static final int C_THEME = 0, C_SLEEP = 1, C_INPUTS = 2, C_NEWS = 3, C_HOME_SETTINGS = 4, C_TV_SETTINGS = 5;
+    private static final String[] CONTROL_SYMBOLS = {"contrast", "bedtime", "hdmi", "news", "settings", "tv_settings"};
+    private static final int[] SLEEP_STEPS = {0, 15, 30, 60, 90, 120};
+    private static final float PANEL_L = 1220, PANEL_T = 60, PANEL_R = 1840, PANEL_B = 1020;
+    private static final float CTL_W = 262, CTL_H = 220, CTL_GAP = 24;
+    private int controlIndex;
+    private final RectF[] controlRects = new RectF[CONTROLS];
+    private final RectF panel = new RectF();
+
+    {
+        for (int i = 0; i < CONTROLS; i++) controlRects[i] = new RectF();
+    }
+
+    private String controlLabel(int i) {
+        switch (i) {
+            case C_THEME: return Ui.tr("Theme");
+            case C_SLEEP: return Ui.tr("Sleep Timer");
+            case C_INPUTS: return Ui.tr("Inputs");
+            case C_NEWS: return Ui.tr("News");
+            case C_HOME_SETTINGS: return Ui.tr("Home Settings");
+            default: return Ui.tr("TV Settings");
+        }
+    }
+
+    /** The tile's state under its name: the theme, the time left on the timer; "" for the ones that only open. */
+    private String controlValue(int i) {
+        if (i == C_THEME) {
+            String t = Prefs.theme();
+            return t.equals("light") ? Ui.tr("Light") : t.equals("dark") ? Ui.tr("Dark") : Ui.tr("Automatic");
+        }
+        if (i == C_SLEEP) {
+            int left = SleepTimer.minutesLeft(getContext());
+            return left == 0 ? Ui.tr("Off") : SleepTimer.duration(left);
+        }
+        return "";
+    }
+
+    private void layoutControls() {
+        panel.set(PANEL_L * k, PANEL_T * k, PANEL_R * k, PANEL_B * k);
+        float left = (PANEL_L + 36) * k, top = (PANEL_T + 150) * k;
+        for (int i = 0; i < CONTROLS; i++) {
+            float x = left + (i % 2) * (CTL_W + CTL_GAP) * k, y = top + (i / 2) * (CTL_H + CTL_GAP) * k;
+            controlRects[i].set(x, y, x + CTL_W * k, y + CTL_H * k);
+            snap(controlRects[i]);
+        }
+    }
+
+    private void drawControlPanel(Canvas c) {
+        c.drawColor(0x8C000000);
+        layoutControls();
+        fill.setShader(null);
+        fill.setColor(0xF21C1C1E);
+        c.drawRoundRect(panel, 56 * k, 56 * k, fill);
+        border.setColor(0x1FFFFFFF);
+        c.drawRoundRect(panel, 56 * k, 56 * k, border);
+        c.drawText(Ui.tr("Control Center"), panel.left + 44 * k, panel.top + 96 * k, panelTitle);
+        for (int i = 0; i < CONTROLS; i++) {
+            RectF r = controlRects[i];
+            boolean on = i == controlIndex;
+            float s = on ? 1.05f : 1;
+            cell.set(r.centerX() - r.width() * s / 2, r.centerY() - r.height() * s / 2,
+                    r.centerX() + r.width() * s / 2, r.centerY() + r.height() * s / 2);
+            if (on) {
+                tmp.set(cell);
+                tmp.offset(0, 10 * k);
+                shadow.setColor(0x73000000);
+                shadows.draw(c, tmp, 36 * k, SHADOW_BLUR * k, shadow);
+            }
+            fill.setColor(on ? 0xFFF5F5F7 : 0x1FFFFFFF);
+            c.drawRoundRect(cell, 36 * k, 36 * k, fill);
+            int ink = on ? INK : 0xF2FFFFFF;
+            Symbols.draw(getContext(), c, CONTROL_SYMBOLS[i], cell.left + 56 * k, cell.top + 64 * k, 34 * k, ink);
+            tileLabel.setColor(ink);
+            float room = cell.width() - 64 * k, x = cell.left + 32 * k;
+            // A long name ("Timer de desligamento") goes on two lines, broken at the last space that fits.
+            String label = controlLabel(i), first = label, second = "";
+            if (tileLabel.measureText(label) > room) {
+                int cut = label.lastIndexOf(' ');
+                while (cut > 0 && tileLabel.measureText(label, 0, cut) > room) cut = label.lastIndexOf(' ', cut - 1);
+                if (cut > 0) {
+                    first = label.substring(0, cut);
+                    second = fit(label.substring(cut + 1), tileLabel, room);
+                } else {
+                    first = fit(label, tileLabel, room);
+                }
+            }
+            String value = controlValue(i);
+            float base = cell.top + (second.isEmpty() ? 150 : 124) * k;
+            c.drawText(first, x, base, tileLabel);
+            if (!second.isEmpty()) c.drawText(second, x, base + 34 * k, tileLabel);
+            if (value.isEmpty()) continue;
+            tileValue.setColor(on ? L_DIM : 0xADFFFFFF);
+            c.drawText(fit(value, tileValue, room), x, cell.top + (second.isEmpty() ? 188 : 198) * k, tileValue);
+        }
+    }
+
+    private void moveControl(int dx, int dy) {
+        int col = controlIndex % 2, row = controlIndex / 2;
+        col = Math.max(0, Math.min(1, col + dx));
+        row = Math.max(0, Math.min(CONTROLS / 2 - 1, row + dy));
+        moveControlTo(row * 2 + col);
+    }
+
+    private void moveControlTo(int i) {
+        if (i == controlIndex) return;
+        controlIndex = i;
+        gridDirty = true;
+        click.move();
+        spoken.focusMoved();
+        wake();
+    }
+
+    private void activateControl() {
+        click.open();
+        switch (controlIndex) {
+            case C_THEME: {
+                String t = Prefs.theme();
+                Prefs.setTheme(t.equals("auto") ? "light" : t.equals("light") ? "dark" : "auto");
+                checkNight(true);
+                break;
+            }
+            case C_SLEEP: {
+                int left = SleepTimer.minutesLeft(getContext()), next = 0;
+                for (int m : SLEEP_STEPS) if (m > left) { next = m; break; }
+                SleepTimer.set(getContext(), next);
+                break;
+            }
+            case C_INPUTS:
+                closeSheet();
+                openDrawer();
+                for (int i = 0; i < drawerItems.size(); i++) {
+                    if (drawerItems.get(i).kind == HomeApps.INPUT) {
+                        drawerIndex = i;
+                        break;
+                    }
+                }
+                retarget(false);
+                return;
+            case C_NEWS:
+                openPage(PAGE_NEWS);
+                return;
+            default: {
+                HomeApps.Item it = controlIndex == C_HOME_SETTINGS ? HomeApps.settings()
+                        : HomeApps.action(HomeApps.ANDROID_SETTINGS, "tv-settings", Ui.tr("TV Settings"), "tv_settings");
+                RectF r = controlRects[controlIndex];
+                closeSheet();
+                if (!HomeApps.open(activity, it, this, Math.round(r.left), Math.round(r.top), Math.round(r.width()),
+                        Math.round(r.height()))) {
+                    showToast(Ui.trf("Couldn't open {app}.", "app", it.label));
+                }
+                return;
+            }
+        }
+        gridDirty = true;
+        heroDirty = statusDirty = drawerDirty = true;
+        spoken.focusMoved();
+        wake();
     }
 
     // MARK: - Toasts
@@ -2129,7 +2511,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     private void move(int dx, int dy) {
         if (sheetOpen) {
-            moveGrid(dx, dy);
+            if (sheetKind == PAGE_NEWS) moveNews(dy);
+            else if (sheetKind == PAGE_CONTROL) moveControl(dx, dy);
+            else moveGrid(dx, dy);
             return;
         }
         if (moveLight(dx, dy)) return;
@@ -2254,6 +2638,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         HomeApps.Item it;
         RectF r;
         if (!sheetOpen && zone == WIDGETS) return;   // a widget is only read
+        if (sheetOpen && sheetKind != PAGE_APPS) {
+            if (sheetKind == PAGE_CONTROL) activateControl();
+            return;
+        }
         if (sheetOpen) {
             if (others.isEmpty()) return;
             it = others.get(gridIndex);
@@ -2273,7 +2661,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             r = drawerRects[drawerIndex];
         } else if (zone == Z_TOP) {
             if (topIndex < 3) {
-                selectTab(topIndex);
+                if (picksOn()) selectTab(topIndex);
+                else openTab(topIndex);
                 return;
             }
             it = lightButtons.get(topIndex - 3);
@@ -2291,6 +2680,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         click.open();
         if (it.kind == HomeApps.ALL_APPS) {
             openSheet();
+            return;
+        }
+        if (it.kind == HomeApps.NEWS || it.kind == HomeApps.CONTROL) {
+            openPage(it.kind == HomeApps.NEWS ? PAGE_NEWS : PAGE_CONTROL);
             return;
         }
         if (it.kind == HomeApps.INPUTS) {
@@ -2323,7 +2716,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private boolean canToggleShelf(int i) {
-        if (!sheetOpen || i >= others.size()) return false;
+        if (!sheetOpen || sheetKind != PAGE_APPS || i >= others.size()) return false;
         HomeApps.Item it = others.get(i);
         return it.kind == HomeApps.APP && it.pkg != null;
     }
@@ -2557,21 +2950,24 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     private void a11yItems(List<Integer> out) {
         if (sheetOpen) {
-            for (int i = 0; i < others.size(); i++) out.add(a11yId(GRID, i));
+            int n = sheetKind == PAGE_NEWS ? data.headlines.length : sheetKind == PAGE_CONTROL ? CONTROLS : others.size();
+            for (int i = 0; i < n; i++) out.add(a11yId(GRID, i));
             return;
         }
-        for (int i = picksOn() ? 0 : 3; i < 3 + lightButtons.size(); i++) out.add(a11yId(Z_TOP, i));
+        for (int i = 0; i < 3 + lightButtons.size(); i++) out.add(a11yId(Z_TOP, i));
         for (int i = 0; i < Math.min(3, cards.size()); i++) out.add(a11yId(Z_CARDS, i));
         for (int i = shelfFirst; i < Math.min(shelf.size(), shelfFirst + shelfVisible); i++) out.add(a11yId(Z_SHELF, i));
         for (int i = 0; i < drawerItems.size(); i++) out.add(a11yId(Z_DRAWER, i));
         if (drawerOpen && Prefs.weather()) out.add(a11yId(WIDGETS, 0));
-        if (drawerOpen && Prefs.quotes() && HomeData.active().length > 0) out.add(a11yId(WIDGETS, 1));
+        if (drawerOpen && (quotesCardOn() || newsCardOn())) out.add(a11yId(WIDGETS, 1));
     }
 
     private String a11yText(int id) {
         int group = (id - 1) / 1000, i = (id - 1) % 1000;
         switch (group) {
             case GRID:
+                if (sheetKind == PAGE_NEWS) return i < data.headlines.length ? data.headlines[i] : "";
+                if (sheetKind == PAGE_CONTROL) return i < CONTROLS ? controlLabel(i) + ", " + controlValue(i) : "";
                 if (i >= others.size()) return "";
                 return label(others, i) + ", " + Ui.trf("{i} of {n}", "i", i + 1, "n", others.size());
             case Z_TOP:
@@ -2585,7 +2981,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 }
                 return label(shelf, i);
             case Z_DRAWER: return label(drawerItems, i);
-            case WIDGETS: return i == 0 ? weatherText() : quotesText();
+            case WIDGETS: return i == 0 ? weatherText() : quotesCardOn() ? quotesText() : newsText();
             default: return "";
         }
     }
@@ -2599,6 +2995,18 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         float dy;
         switch (group) {
             case GRID: {
+                if (sheetOpen && sheetKind == PAGE_NEWS) {
+                    if (i >= data.headlines.length) return false;
+                    a11yRect.set(newsRowRect(i));
+                    dy = 0;
+                    break;
+                }
+                if (sheetOpen && sheetKind == PAGE_CONTROL) {
+                    if (i >= CONTROLS) return false;
+                    a11yRect.set(controlRects[i]);
+                    dy = 0;
+                    break;
+                }
                 if (!sheetOpen || i >= others.size()) return false;
                 float gridWidth = COLUMNS * GRID_W + (COLUMNS - 1) * GRID_GAP;
                 float x = ((1920 - gridWidth) / 2 + (i % COLUMNS) * (GRID_W + GRID_GAP)) * k;
@@ -2644,6 +3052,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private int a11yFocused() {
+        if (sheetOpen && sheetKind == PAGE_NEWS) return data.headlines.length == 0 ? -1 : a11yId(GRID, newsIndex);
+        if (sheetOpen && sheetKind == PAGE_CONTROL) return a11yId(GRID, controlIndex);
         if (sheetOpen) return others.isEmpty() ? -1 : a11yId(GRID, gridIndex);
         switch (zone) {
             case Z_TOP: return a11yId(Z_TOP, topIndex);
@@ -2660,7 +3070,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         List<Integer> out = new ArrayList<>();
         if (!drawerOpen) return out;
         if (Prefs.weather()) out.add(0);
-        if (Prefs.quotes() && HomeData.active().length > 0) out.add(1);
+        if (quotesCardOn() || newsCardOn()) out.add(1);
         return out;
     }
 
@@ -2675,6 +3085,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void a11yFocus(int id) {
         wake();
         int group = (id - 1) / 1000, i = (id - 1) % 1000;
+        if (group == GRID && sheetOpen && sheetKind != PAGE_APPS) {
+            if (sheetKind == PAGE_NEWS && i < data.headlines.length) moveNews(i - newsIndex);
+            else if (sheetKind == PAGE_CONTROL && i < CONTROLS) moveControlTo(i);
+            return;
+        }
         if (group == GRID) {
             if (!sheetOpen || i >= others.size()) return;
             gridIndex = i;
@@ -2695,10 +3110,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 widgetIndex = i;
                 break;
             case Z_TOP:
-                if (i >= 3 + lightButtons.size() || (i < 3 && !picksOn())) return;
+                if (i >= 3 + lightButtons.size()) return;
                 if (drawerOpen) closeDrawer();
                 topIndex = i;
-                if (i < 3) selectTab(i);
+                if (i < 3 && picksOn()) selectTab(i);
                 break;
             case Z_CARDS:
                 if (i >= cards.size()) return;
@@ -2812,8 +3227,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         for (Recs.Pick p : recs.wanted()) recs.backdrop(p);   // all three tabs preloaded: switching tabs is instant
         // Picks bring their own background; without them (no TMDB key), your photo if there is one.
         boolean own = !picksOn() && Photos.on(getContext());
-        Backdrop b = own ? Photos.backdrop(getContext(), ownReady) : cards.isEmpty() ? null : recs.backdrop(cards.get(0));
-        if (b != null || (cards.isEmpty() && !own)) showBackdrop(b);
+        // Without picks or photos: Bing's photo of the day (bing_wallpaper), or the gradient.
+        boolean bing = !picksOn() && !own && Wallpaper.on();
+        Backdrop b = own ? Photos.backdrop(getContext(), ownReady) : bing ? Wallpaper.backdrop(getContext(), ownReady)
+                : cards.isEmpty() ? null : recs.backdrop(cards.get(0));
+        if (b != null || (cards.isEmpty() && !own && !bing)) showBackdrop(b);
         heroDirty = true;
         spoken.focusMoved();    // new picks under the focused card
     }
@@ -2872,18 +3290,32 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void drawLightTop(Canvas c) {
         applyTone();
         if (!picksOn()) {
+            drawTabs(c, 0);
             drawClock(c);
             if (HomeData.coinCount() > 0) drawQuotes(c);
+            else drawNews(c);
             return;
         }
         String hello = Ui.tr("For You");
         c.drawText(hello, MARGIN * k - Ui.leftBearing(lTitle, hello), L_TITLE_BASE * k, lTitle);
-        // Text tabs (the selected one in bold, in the main text color); with focus on the tabs, the selected one gets
-        // the white pill with a shadow and grows a little (the tvOS focus).
-        float focus = Ui.clamp(topFocus[tab].value);
+        drawTabs(c, tab);
+        int top = -1;
+        for (int i = 0; i < 3; i++) if (cardFocus[i].value > 0.02f && (top < 0 || cardFocus[i].value > cardFocus[top].value)) top = i;
+        for (int i = 0; i < 3; i++) if (i != top) drawLightCard(c, i);
+        if (top >= 0) drawLightCard(c, top);
+        if (HomeData.coinCount() > 0) drawQuotes(c);
+    }
+
+    /**
+     * Text tabs (the selected one in bold, in the main text color); the focused one gets the white pill with a shadow
+     * and grows a little (the tvOS focus).
+     */
+    private void drawTabs(Canvas c, int selected) {
+        int dim = lTab.getColor();
         for (int i = 0; i < 3; i++) {
             RectF r = topRects[i];
-            if (i == tab && focus > 0.01f) {
+            float focus = Ui.clamp(topFocus[i].value);
+            if (focus > 0.01f) {
                 float s = 1 + 0.05f * focus;
                 cell.set(r.centerX() - r.width() * s / 2, r.centerY() - r.height() * s / 2,
                         r.centerX() + r.width() * s / 2, r.centerY() + r.height() * s / 2);
@@ -2898,15 +3330,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 fill.setColor(Ui.alpha(0xFFFFFFFF, focus));
                 c.drawRoundRect(cell, rr, rr, fill);
             }
-            Paint p = i == tab ? lTabOn : lTab;
-            if (i == tab) lTabOn.setColor(blend(tone(L_INK, WHITE), L_INK, focus));   // always dark on the white pill
+            Paint p = i == selected ? lTabOn : lTab;
+            // Always dark on the white pill.
+            p.setColor(blend(i == selected ? tone(L_INK, WHITE) : dim, L_INK, focus));
             c.drawText(tabs()[i], r.centerX() - p.measureText(tabs()[i]) / 2, r.centerY() + Ui.halfCap(p), p);
         }
-        int top = -1;
-        for (int i = 0; i < 3; i++) if (cardFocus[i].value > 0.02f && (top < 0 || cardFocus[i].value > cardFocus[top].value)) top = i;
-        for (int i = 0; i < 3; i++) if (i != top) drawLightCard(c, i);
-        if (top >= 0) drawLightCard(c, top);
-        if (HomeData.coinCount() > 0) drawQuotes(c);
+        lTab.setColor(dim);
     }
 
     private boolean picksOn() {
@@ -3045,9 +3474,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 // Up from an empty shelf too: move()'s older zones (the hero, the corner capsule) aren't drawn any more.
                 if (dy >= 0) return false;
                 if (cards.isEmpty()) {
-                    if (!picksOn() && lightButtons.isEmpty()) return true;   // no tabs and no buttons above
                     zone = Z_TOP;
-                    topIndex = picksOn() ? tab : 3;
+                    topIndex = picksOn() ? tab : 0;
                 } else {
                     zone = Z_CARDS;
                     cardIndex = nearest(cardRects, cards.size(), shelf.isEmpty() ? w / 2f : tileRects[shelfIndex].centerX());
@@ -3068,10 +3496,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 break;
             case Z_TOP:
                 if (dx != 0) {
-                    int next = Math.max(picksOn() ? 0 : 3, Math.min(2 + lightButtons.size(), topIndex + dx));
+                    int next = Math.max(0, Math.min(2 + lightButtons.size(), topIndex + dx));
                     if (next == topIndex) return true;
                     topIndex = next;
-                    if (topIndex < 3) selectTab(topIndex);   // like Apple TV tabs: focusing a tab selects it
+                    // Like Apple TV tabs: focusing a tab selects it (the picks' tabs; the pages open with OK).
+                    if (topIndex < 3 && picksOn()) selectTab(topIndex);
                 } else if (dy > 0) {
                     if (cards.isEmpty()) {
                         zone = Z_SHELF;
