@@ -20,6 +20,7 @@ MAP = {
     "live_tv": ("live_tv", 1), "bitcoin": ("currency_bitcoin", 0),
     "keystone": ("settings_overscan", 1), "cast": ("cast", 1),
     "control": ("toggle_on", 1), "news": ("newspaper", 0), "contrast": ("contrast", 1),
+    "pause": ("pause", 1), "previous": ("skip_previous", 1), "next": ("skip_next", 1),
 }
 
 

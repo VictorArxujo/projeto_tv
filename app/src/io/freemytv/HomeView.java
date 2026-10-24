@@ -89,7 +89,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     /** Blur radii of the shadow and shadowDeep paints (Shadows needs them to draw the same blur on older TVs). */
     private static final float SHADOW_BLUR = 26, DEEP_BLUR = 30;
     private static final int SKY = 0, HERO = 1, STATUS = 2, PLATTER = 3, TILES = 4, DRAWER = 5, SHEET = 6, TOAST = 7;
-    private static final int Z_STATUS = 0, Z_HERO = 1, Z_SHELF = 2, Z_DRAWER = 3;
+    private static final int Z_STATUS = 0, Z_HERO = 1, Z_SHELF = 2, Z_DRAWER = 3, Z_MUSIC = 6;
     private static final ExecutorService LOADER = Executors.newSingleThreadExecutor();
     // Light design (the L_ constants): title, tab bar, three recommendation cards and the shelf.
     // The tab bar is a 68 px capsule; the cards sit on the 5-column grid (the wide one spans 3).
@@ -249,7 +249,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     private Paint labelPaint, metaPaint, clockPaint, buttonPaint, capsuleText, tipPaint, quotePaint, staleQuote;
     private Paint rowTitle, drawerLabel, cardTitle, cardText, cardDim, cardDimRight, bigTemp, hourPaint, hourTemp;
-    private Paint lNews, newsAccent;
+    private Paint lNews, newsAccent, lMusicTitle, lMusicArtist, lMusicTime, lMusicLeft;
     private Paint pricePaint, changePaint, sheetTitle;
     private Paint pageHead, pageText, pageDim, panelTitle, tileLabel, tileValue;
     private TextPaint titlePaint, gridLabel, toastPaint;
@@ -353,6 +353,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             wake();
             data.refreshIfStale();
             recs.refreshIfStale();
+            music.retry();   // the listener may come back a moment after an update
             checkNotices();
             updatePalette();
             checkNight(true);
@@ -428,6 +429,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         lastStep = 0;
         data.addListener(this);
         recs.addListener(this);
+        music.start();
         data.refreshIfStale();
         recs.refreshIfStale();
         Photos.importInbox(getContext(), ownReady);   // photos a computer just sent
@@ -458,6 +460,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         handler.removeCallbacks(reloadSoon);
         data.removeListener(this);
         recs.removeListener(this);
+        music.stop();
+        handler.removeCallbacks(progressTick);
         if (tvInputs != null) tvInputs.unregisterCallback(inputCallback);
     }
 
@@ -627,6 +631,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         lWeather = Ui.text(Ui.medium, 34 * k, L_DIM);
         lClockQuote = Ui.numbers(Ui.medium, 28 * k, L_DIM);
         lNews = Ui.text(Ui.medium, 28 * k, L_DIM);
+        lMusicTitle = Ui.text(Ui.semibold, 27 * k, L_INK);
+        lMusicArtist = Ui.text(Ui.medium, 23 * k, L_DIM);
+        lMusicTime = Ui.numbers(Ui.medium, 19 * k, L_DIM);
+        lMusicLeft = Ui.numbers(Ui.medium, 19 * k, L_DIM);
+        lMusicLeft.setTextAlign(Paint.Align.RIGHT);
         newsAccent = Ui.text(Ui.semibold, 29 * k, 0xFF64D2FF);
         lightGradient = null;
         buttonPaint = Ui.text(Ui.semibold, 29 * k, INK);
@@ -690,7 +699,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (reorderAnim) tilesMoving |= stepReorder(dt, up);
         boolean statusMoving = step(statusFocus, dt);
         boolean heroMoving = heroFocus.step(dt);
-        boolean topMoving = step(topFocus, dt), cardsMoving = step(cardFocus, dt);
+        boolean topMoving = step(topFocus, dt), cardsMoving = step(cardFocus, dt) | step(musicFocus, dt);
         if (topMoving) status.invalidate();
         heroMoving |= topMoving | cardsMoving;
         boolean drawerItemsMoving = step(drawerFocus, dt);
@@ -1013,6 +1022,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         lWeather.setColor(tone(L_DIM, 0xFF98989D));
         lClockQuote.setColor(tone(L_DIM, 0xFF98989D));
         lNews.setColor(tone(L_DIM, 0xFF98989D));
+        lMusicTitle.setColor(tone(L_INK, WHITE));
+        lMusicArtist.setColor(tone(L_DIM, 0xFF98989D));
+        lMusicTime.setColor(tone(L_DIM, 0xFF98989D));
+        lMusicLeft.setColor(tone(L_DIM, 0xFF98989D));
         staleQuote.setColor(tone(L_FAINT, 0x99FFFFFF));
     }
 
@@ -1835,6 +1848,161 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         newsLine = fit(!election.isEmpty() ? election : all.length > 0 ? all[0] : "", lNews, 1100 * k);
     }
 
+    // What's playing (NowPlaying): a small glass card at the top right, under the round buttons, with the album art, the
+    // song and the artist. ↑ from the shelf focuses it: it opens into the player (bigger art, and the buttons previous,
+    // play or pause and next centered under it); the button in focus turns white, and OK presses it.
+    private static final float ART = 64, ART_OPEN = 96, PLAYER_W = 470, PLAYER_W_OPEN = 560;
+    private static final float PLAYER_TOP = 212, PLAYER_PAD = 18, PLAYER_PAD_OPEN = 24;
+    private static final float MUSIC_BUTTON = 52, MUSIC_GAP = 28;
+    private static final String[] MUSIC_SYMBOLS = {"previous", "play", "next"};
+    private final NowPlaying.Watch music = new NowPlaying.Watch(getContext(),
+            Math.round(ART_OPEN * getResources().getDisplayMetrics().widthPixels / 1920f), this::onMusic);
+    // The song and the artist fitted to the card closed and open (made once per song, never while drawing).
+    private String musicTitle = "", musicArtist = "", musicTitleOpen = "", musicArtistOpen = "";
+    private Bitmap musicArt;
+    private BitmapShader musicShader;
+    private final RectF artRect = new RectF(), playerRect = new RectF();
+    private final Spring[] musicFocus = new Spring[3];
+    private final RectF[] musicRects = {new RectF(), new RectF(), new RectF()};
+    private int musicIndex = 1;
+
+    {
+        for (int i = 0; i < 3; i++) musicFocus[i] = new Spring(0.32f, 0.78f, 0);
+    }
+
+    /** The player shows (without picks, and something is playing or paused). */
+    private boolean musicOn() {
+        return music.shown && !picksOn();
+    }
+
+    private void onMusic() {
+        if (lMusicTitle != null) {
+            float closed = (PLAYER_W - 3 * PLAYER_PAD - ART) * k, open = (PLAYER_W_OPEN - 3 * PLAYER_PAD_OPEN - ART_OPEN) * k;
+            musicTitle = fit(music.title, lMusicTitle, closed);
+            musicArtist = fit(music.artist, lMusicArtist, closed);
+            musicTitleOpen = fit(music.title, lMusicTitle, open);
+            musicArtistOpen = fit(music.artist, lMusicArtist, open);
+        }
+        if (zone == Z_MUSIC && !musicOn()) {   // the music stopped under the focus
+            zone = Z_SHELF;
+            retarget(false);
+        }
+        if (music.art != musicArt) {
+            musicArt = music.art;
+            musicShader = musicArt == null ? null : new BitmapShader(musicArt, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+        }
+        heroDirty = true;
+        spoken.focusMoved();
+        wake();
+    }
+
+    // The open player's progress bar: elapsed time at the left, time left at the right ("1:23" … "−2:10").
+    private static final float PROGRESS_ROW = 56;
+    private long progressSecond = -1, progressDuration = -1;
+    private String progressDone = "", progressLeft = "";
+    private final Runnable progressTick = () -> {
+        heroDirty = true;
+        wake();
+    };
+
+    private static String clock(long ms) {
+        long s = ms / 1000;
+        return String.format(java.util.Locale.ROOT, "%d:%02d", s / 60, s % 60);
+    }
+
+    private static float lerp(float a, float b, float t) {
+        return a + (b - a) * t;
+    }
+
+    private void drawMusic(Canvas c) {
+        if (musicTitle.isEmpty() && !music.title.isEmpty()) onMusic();   // the paints weren't made yet
+        // How open the card is: one of its buttons has the focus (the springs hand it over from one to the next).
+        float e = Ui.clamp(musicFocus[0].value + musicFocus[1].value + musicFocus[2].value);
+        float pad = lerp(PLAYER_PAD, PLAYER_PAD_OPEN, e) * k, art = lerp(ART, ART_OPEN, e) * k;
+        float b = MUSIC_BUTTON * k, rowH = (18 + MUSIC_BUTTON + PROGRESS_ROW) * k * e;
+        float right = CONTENT_R * k, top = PLAYER_TOP * k, width = lerp(PLAYER_W, PLAYER_W_OPEN, e) * k;
+        playerRect.set(right - width, top, right, top + 2 * pad + art + rowH);
+        float radius = lerp(28, 36, e) * k;
+        tmp.set(playerRect);
+        tmp.offset(0, (8 + 10 * e) * k);
+        shadow.setColor(Ui.alpha(0xFF000000, tone(0.1f, 0.3f) + tone(0.12f, 0.2f) * e));
+        shadows.draw(c, tmp, radius, SHADOW_BLUR * k, shadow);
+        scene.liquid(c, playerRect, radius, tone(0xFFFFFFFF, SMOKE), tone(0.42f, 0.12f), tone(0.03f, 0.08f),
+                tone(30, 34) * k, tone(22, 28) * k, tone(0.65f, 0.95f), 1);
+        if (e > 0.01f) {   // open, the glass lightens a little (the tvOS card focus)
+            fill.setShader(null);
+            fill.setColor(Ui.alpha(tone(0xFFFFFFFF, 0xFF3A3A3C), 0.35f * e));
+            c.drawRoundRect(playerRect, radius, radius, fill);
+        }
+        float x = playerRect.left + pad;
+        if (musicArt != null) {
+            artRect.set(x, top + pad, x + art, top + pad + art);
+            roundImage(c, musicArt, musicShader, artRect, lerp(12, 16, e) * k);
+        }
+        x += art + pad;
+        // Paused: a little dimmer, like the Music app's mini player.
+        int alpha = music.playing ? 255 : 150;
+        lMusicTitle.setAlpha(alpha);
+        lMusicArtist.setAlpha(alpha);
+        float mid = top + pad + art / 2;
+        boolean open = e > 0.5f;
+        c.drawText(open ? musicTitleOpen : musicTitle, x, mid - 4 * k, lMusicTitle);
+        c.drawText(open ? musicArtistOpen : musicArtist, x, mid + 30 * k, lMusicArtist);
+        lMusicTitle.setAlpha(255);
+        lMusicArtist.setAlpha(255);
+        // The buttons, centered under the art and the song, fading in as the card opens.
+        float total = 3 * MUSIC_BUTTON + 2 * MUSIC_GAP, bx = playerRect.centerX() - total * k / 2;
+        float by = top + 2 * PLAYER_PAD_OPEN * k + ART_OPEN * k - 6 * k + b / 2;
+        for (int i = 0; i < 3; i++) {
+            float left = bx + i * (MUSIC_BUTTON + MUSIC_GAP) * k;
+            musicRects[i].set(left, by - b / 2, left + b, by + b / 2);
+        }
+        float shown = Ui.clamp((e - 0.35f) / 0.65f);
+        if (shown <= 0.01f) return;
+        int save = c.saveLayerAlpha(playerRect.left, playerRect.top, playerRect.right, playerRect.bottom + 8 * k,
+                Math.round(255 * shown));
+        for (int i = 0; i < 3; i++) {
+            RectF r = musicRects[i];
+            float g = Ui.clamp(musicFocus[i].value), rad = b / 2 * (1 + 0.1f * g);
+            fill.setColor(tone(0x14000000, 0x1FFFFFFF));
+            c.drawCircle(r.centerX(), r.centerY(), rad, fill);
+            if (g > 0.01f) {
+                fill.setColor(Ui.alpha(0xFFFFFFFF, g));
+                c.drawCircle(r.centerX(), r.centerY(), rad, fill);
+            }
+            String symbol = i == 1 && music.playing ? "pause" : MUSIC_SYMBOLS[i];
+            Symbols.draw(getContext(), c, symbol, r.centerX(), r.centerY(), 26 * k * (1 + 0.1f * g),
+                    blend(tone(L_INK, 0xEBFFFFFF), L_INK, g));
+        }
+        drawProgress(c, by + b / 2 + 22 * k);
+        c.restoreToCount(save);
+    }
+
+    /** The bar under the buttons; while it plays, the screen is drawn again at the next whole second (only when open). */
+    private void drawProgress(Canvas c, float y) {
+        long now = music.positionNow(), d = music.duration;
+        if (now / 1000 != progressSecond || d != progressDuration) {   // the text, once a second
+            progressSecond = now / 1000;
+            progressDuration = d;
+            progressDone = clock(now);
+            progressLeft = d > 0 ? "\u2212" + clock(Math.max(0, d - now)) : "";
+        }
+        float left = playerRect.left + PLAYER_PAD_OPEN * k, right = playerRect.right - PLAYER_PAD_OPEN * k, h = 6 * k;
+        tmp.set(left, y - h / 2, right, y + h / 2);
+        fill.setShader(null);
+        fill.setColor(tone(0x26000000, 0x33FFFFFF));
+        c.drawRoundRect(tmp, h / 2, h / 2, fill);
+        if (d > 0) {
+            tmp.right = left + (right - left) * Math.min(1f, now / (float) d);
+            fill.setColor(tone(0xCC1D1D1F, 0xE6FFFFFF));
+            c.drawRoundRect(tmp, h / 2, h / 2, fill);
+        }
+        c.drawText(progressDone, left, y + 32 * k, lMusicTime);
+        if (!progressLeft.isEmpty()) c.drawText(progressLeft, right, y + 32 * k, lMusicLeft);
+        handler.removeCallbacks(progressTick);
+        if (music.playing) handler.postDelayed(progressTick, 1000 - now % 1000 + 20);
+    }
+
     /** Under the clock and the weather: the election, when one is near, or else the latest headline. */
     private void drawNews(Canvas c) {
         makeNews();
@@ -1887,6 +2055,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (snap) heroFocus.snap(heroFocus.target);
         boolean topChanged = aim(topFocus, !sheetOpen && zone == Z_TOP ? topIndex : -1, snap);
         heroChanged |= aim(cardFocus, !sheetOpen && zone == Z_CARDS ? cardIndex : -1, snap) | topChanged;
+        heroChanged |= aim(musicFocus, !sheetOpen && zone == Z_MUSIC ? musicIndex : -1, snap);
         statusChanged |= topChanged;
         tilesDirty |= snap || tilesChanged;
         statusDirty |= snap || statusChanged;
@@ -2638,6 +2807,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         HomeApps.Item it;
         RectF r;
         if (!sheetOpen && zone == WIDGETS) return;   // a widget is only read
+        if (!sheetOpen && zone == Z_MUSIC) {
+            click.open();
+            music.command(musicIndex);
+            return;
+        }
         if (sheetOpen && sheetKind != PAGE_APPS) {
             if (sheetKind == PAGE_CONTROL) activateControl();
             return;
@@ -2955,6 +3129,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             return;
         }
         for (int i = 0; i < 3 + lightButtons.size(); i++) out.add(a11yId(Z_TOP, i));
+        if (musicOn()) for (int i = 0; i < 3; i++) out.add(a11yId(Z_MUSIC, i));
         for (int i = 0; i < Math.min(3, cards.size()); i++) out.add(a11yId(Z_CARDS, i));
         for (int i = shelfFirst; i < Math.min(shelf.size(), shelfFirst + shelfVisible); i++) out.add(a11yId(Z_SHELF, i));
         for (int i = 0; i < drawerItems.size(); i++) out.add(a11yId(Z_DRAWER, i));
@@ -2974,6 +3149,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 if (i >= 3) return label(lightButtons, i - 3);
                 return Ui.trf("{name}, tab {i} of {n}", "name", tabs()[i], "i", i + 1, "n", 3);
             case Z_CARDS: return i < cards.size() ? pickText(cards.get(i)) : "";
+            case Z_MUSIC:
+                if (i == 0) return Ui.tr("Previous track");
+                if (i == 2) return Ui.tr("Next track");
+                return (music.playing ? Ui.tr("Pause") : Ui.tr("Play")) + ", " + music.title + ", " + music.artist;
             case Z_SHELF:
                 if (reordering && i == shelfIndex) {
                     return Ui.trf("Moving {app}, position {n} of {total}",
@@ -3020,6 +3199,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 a11yRect.set(topRects[i]);
                 dy = (i < 3 ? heroLayer : status).getTranslationY();
                 break;
+            case Z_MUSIC:
+                if (i >= 3 || !musicOn()) return false;
+                a11yRect.set(musicRects[i]);
+                dy = heroLayer.getTranslationY();
+                break;
             case Z_CARDS:
                 if (i >= Math.min(3, cards.size())) return false;
                 a11yRect.set(cardRects[i]);
@@ -3057,6 +3241,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (sheetOpen) return others.isEmpty() ? -1 : a11yId(GRID, gridIndex);
         switch (zone) {
             case Z_TOP: return a11yId(Z_TOP, topIndex);
+            case Z_MUSIC: return a11yId(Z_MUSIC, musicIndex);
             case Z_CARDS: return cardIndex < cards.size() ? a11yId(Z_CARDS, cardIndex) : -1;
             case Z_SHELF: return shelf.isEmpty() ? -1 : a11yId(Z_SHELF, shelfIndex);
             case Z_DRAWER: return drawerItems.isEmpty() ? -1 : a11yId(Z_DRAWER, drawerIndex);
@@ -3119,6 +3304,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 if (i >= cards.size()) return;
                 if (drawerOpen) closeDrawer();
                 cardIndex = i;
+                break;
+            case Z_MUSIC:
+                if (i >= 3 || !musicOn()) return;
+                if (drawerOpen) closeDrawer();
+                musicIndex = i;
                 break;
             case Z_SHELF:
                 if (i >= shelf.size()) return;
@@ -3210,6 +3400,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             Symbols.warm(getContext(), it.symbol, 27 * k * 1.1f);
         }
         Symbols.warmWeather(getContext(), 40 * k);
+        for (String name : new String[] {"previous", "play", "pause", "next"}) {
+            Symbols.warm(getContext(), name, 26 * k);
+            Symbols.warm(getContext(), name, 26 * k * 1.1f);
+        }
         heroDirty = statusDirty = true;
     }
 
@@ -3294,6 +3488,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             drawClock(c);
             if (HomeData.coinCount() > 0) drawQuotes(c);
             else drawNews(c);
+            if (musicOn()) drawMusic(c);
             return;
         }
         String hello = Ui.tr("For You");
@@ -3473,7 +3668,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             case Z_SHELF:
                 // Up from an empty shelf too: move()'s older zones (the hero, the corner capsule) aren't drawn any more.
                 if (dy >= 0) return false;
-                if (cards.isEmpty()) {
+                if (cards.isEmpty() && musicOn()) {
+                    zone = Z_MUSIC;
+                    musicIndex = 1;
+                } else if (cards.isEmpty()) {
                     zone = Z_TOP;
                     topIndex = picksOn() ? tab : 0;
                 } else {
@@ -3494,6 +3692,18 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     if (!shelf.isEmpty()) shelfIndex = nearest(tileRects, tileRects.length, cardRects[cardIndex].centerX());
                 }
                 break;
+            case Z_MUSIC:
+                if (dx != 0) {
+                    int next = Math.max(0, Math.min(2, musicIndex + dx));
+                    if (next == musicIndex) return true;
+                    musicIndex = next;
+                } else if (dy < 0) {
+                    zone = Z_TOP;   // the round buttons right above it, else the tabs
+                    topIndex = lightButtons.isEmpty() ? 0 : 2 + lightButtons.size();
+                } else {
+                    zone = Z_SHELF;
+                }
+                break;
             case Z_TOP:
                 if (dx != 0) {
                     int next = Math.max(0, Math.min(2 + lightButtons.size(), topIndex + dx));
@@ -3502,7 +3712,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     // Like Apple TV tabs: focusing a tab selects it (the picks' tabs; the pages open with OK).
                     if (topIndex < 3 && picksOn()) selectTab(topIndex);
                 } else if (dy > 0) {
-                    if (cards.isEmpty()) {
+                    if (cards.isEmpty() && musicOn() && topIndex >= 3) {   // from the round buttons, the card under them
+                        zone = Z_MUSIC;
+                        musicIndex = 1;
+                    } else if (cards.isEmpty()) {
                         zone = Z_SHELF;
                     } else {
                         zone = Z_CARDS;

@@ -254,16 +254,26 @@ final class HomeMode {
      * boot check and an update turn it back on.
      */
     static void ensureRemoteService(Context c, long delayMs) {
-        if (RemoteKeys.supported()) ModeJob.schedule(c, ModeJob.REMOTE, null, delayMs);
+        // Also the now-playing listener, which Android may take back too (it needs no maker's keys).
+        if (RemoteKeys.supported() || !NowPlaying.allowed(c)) ModeJob.schedule(c, ModeJob.REMOTE, null, delayMs);
     }
 
     static void ensureRemoteServiceNow(Context app) {
-        if (!RemoteKeys.supported() || !FREE.equals(state(app).optString("mode"))) return;
+        boolean keys = RemoteKeys.supported(), music = !NowPlaying.allowed(app);
+        if ((!keys && !music) || !FREE.equals(state(app).optString("mode"))) return;
         try (Adb adb = Adb.connect(app, 10_000, null)) {
-            remoteService(app, adb, true);
+            if (keys) remoteService(app, adb, true);
+            if (music) nowPlaying(app, adb, true);
         } catch (IOException e) {
             AppLog.w("remote buttons service: " + e.getMessage());
         }
+    }
+
+    /** Allows our notification listener (NowPlaying: what's playing on the home screen), or takes it back. */
+    private static void nowPlaying(Context c, Adb adb, boolean on) throws IOException {
+        String me = NowPlaying.component(c).flattenToString();
+        String out = adb.shell("cmd notification " + (on ? "allow_listener " : "disallow_listener ") + me).trim();
+        AppLog.w("now playing listener " + (on ? "on" : "off") + (out.isEmpty() ? "" : ": " + out));
     }
 
     private static final String REMOTE_SERVICE = PKG + "/" + PKG + ".RemoteKeyService";
@@ -426,6 +436,11 @@ final class HomeMode {
                     AppLog.w("remote buttons service: " + e.getMessage());
                 }
             }
+            try {
+                nowPlaying(c, adb, true);
+            } catch (IOException e) {
+                AppLog.w("now playing listener: " + e.getMessage());
+            }
             notice(c, Ui.trf("Free My TV is on: new home screen and screensaver, {n} apps turned off.", "n", disabled.size()));
             busy(c, Ui.tr("Measuring Free My TV…"));
             measureHomeTime(c, adb, FREE);
@@ -480,6 +495,11 @@ final class HomeMode {
                 remoteService(c, adb, false);
             } catch (IOException e) {
                 AppLog.w("remote buttons service: " + e.getMessage());
+            }
+            try {
+                nowPlaying(c, adb, false);
+            } catch (IOException e) {
+                AppLog.w("now playing listener: " + e.getMessage());
             }
             SleepTimer.stop(c);
             adb.shell("appops set " + PKG + " SYSTEM_ALERT_WINDOW default");   // SleepOverlay's, if it was allowed
